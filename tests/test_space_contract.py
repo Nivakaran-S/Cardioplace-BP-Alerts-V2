@@ -90,6 +90,50 @@ def _strict(obj):
         return False
 
 
+def _forecast_node_contract():
+    """The Space must read the keys `BPPredictor.predict` actually writes.
+
+    This is a unit test on the renderers, not an integration test, so it runs with no bundle
+    on disk -- which matters, because the bug it guards against was invisible exactly when no
+    model was loaded: an empty forecast table looked like "no model" rather than like a
+    misread key. The node shape below mirrors `estimator.py:736-747`.
+    """
+    node = {"point": 158.4, "readings_ahead": 1, "steps_ahead": 1, "days_ahead_est": 2.0,
+            "lo80": 148.1, "hi80": 168.7, "interval_basis": "quantile GBM, conformal on val"}
+    plain = {"point": 161.2, "readings_ahead": 2, "steps_ahead": 2, "days_ahead_est": 4.0}
+    d = {"forecast": {"sbp": {"h0": node, "h1": plain}}, "personalisation": {"threshold": 145.0}}
+
+    fc = G.forecast_frame(d)
+    chk("forecast table renders a row per horizon", len(fc) == 2, fc.to_string())
+    chk("forecast table shows the predicted value, not an em-dash",
+        "158.4" in fc.to_string(), fc.to_string())
+    chk("forecast table shows the 80% interval where one exists",
+        "148.1" in fc.to_string() and "168.7" in fc.to_string(), fc.to_string())
+    chk("forecast table says so where no interval was fitted",
+        "not fitted" in fc.to_string(), fc.to_string())
+    chk("forecast table shows days ahead", "2.0" in fc.to_string(), fc.to_string())
+
+    # No numeric column may be entirely blank -- that is the signature of a misread key.
+    for c in ("predicted", "days ahead"):
+        col = fc[c].astype(str)
+        chk(f"forecast column {c!r} is not all-empty",
+            not col.str.strip().isin({"—", "", "None", "nan"}).all(), col.to_list())
+
+    rows = G.parse_readings(G.SAMPLE)
+    ch = G.chart_frame(d, rows)
+    fser = ch[ch.series == "Forecast SBP"]
+    chk("chart plots the forecast series", len(fser) == 2, ch.series.value_counts().to_dict())
+    chk("chart uses the forecast point values",
+        set(fser.mmHg.round(1)) == {158.4, 161.2}, fser.mmHg.to_list())
+
+    # Prove the checks bite: the OLD key names must produce an empty table.
+    stale = {"forecast": {"sbp": {"h0": {"sbp": 158.4, "lo": 148.1, "hi": 168.7,
+                                         "days_ahead": 2.0}}}}
+    bad = G.forecast_frame(stale)
+    chk("    (control) the pre-fix key names render no value",
+        "158.4" not in bad.to_string(), bad.to_string())
+
+
 def _clinical():
     # The claim the whole degraded path rests on: an emergency reading is an emergency with
     # no model on disk. Paired with a normal history so a green result cannot be vacuous.
@@ -157,6 +201,8 @@ def run():
     _parsing()
     print("\n--- rendering ---")
     _rendering()
+    print("\n--- forecast node contract ---")
+    _forecast_node_contract()
     print("\n--- clinical behaviour (no model on disk) ---")
     _clinical()
     print("\n--- Space / API equivalence ---")

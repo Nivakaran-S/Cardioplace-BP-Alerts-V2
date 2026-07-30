@@ -172,18 +172,31 @@ def tiles_md(d: dict) -> str:
 
 
 def forecast_frame(d: dict) -> pd.DataFrame:
-    """One row per (signal, horizon), with the 80% conformal interval."""
+    """One row per (signal, horizon), with the 80% conformal interval where one exists.
+
+    The key names are a contract with `BPPredictor.predict`, which writes `point`,
+    `readings_ahead`, `steps_ahead`, `days_ahead_est` and -- on the single node that has an
+    interval -- `lo80`, `hi80`, `interval_basis`. Guessing `sbp`/`lo`/`days_ahead` here
+    produced a table of em-dashes that looked like "no forecast" rather than like a bug, which
+    is why `_forecast_cols` is asserted in tests/test_space_contract.py.
+
+    Only one node carries a band: `fit_quantile_interval` is fitted for sbp at one horizon
+    only, so a blank interval on the other rows is the true state of the bundle, not a
+    rendering failure. The basis column says which.
+    """
     rows = []
     for sig, per_h in (d.get("forecast") or {}).items():
         for key, f in (per_h or {}).items():
             if not isinstance(f, dict):
                 continue
+            lo, hi = f.get("lo80"), f.get("hi80")
             rows.append({
                 "signal": sig.upper(), "horizon": key,
-                "days ahead": f.get("days_ahead"),
-                "predicted": _num(f.get(sig) if sig in f else f.get("value")),
-                "lo (80%)": _num(f.get("lo")), "hi (80%)": _num(f.get("hi")),
-                "model": f.get("model") or "—",
+                "readings ahead": f.get("readings_ahead"),
+                "days ahead": _num(f.get("days_ahead_est")),
+                "predicted": _num(f.get("point")),
+                "80% interval": (f"{_num(lo)} – {_num(hi)}" if lo is not None and hi is not None
+                                 else "not fitted at this horizon"),
             })
     return pd.DataFrame(rows) if rows else pd.DataFrame(
         {"note": ["no forecast issued — see the banner for why"]})
@@ -196,12 +209,12 @@ def chart_frame(d: dict, readings: list[dict]) -> pd.DataFrame:
     last = max((r["date"] for r in readings), default=None)
     if last is not None:
         base = pd.Timestamp(last)
-        for _sig, per_h in (d.get("forecast") or {}).items():
-            for f in (per_h or {}).values():
-                if isinstance(f, dict) and f.get("sbp") is not None:
-                    rows.append({"date": base + pd.Timedelta(days=float(f.get("days_ahead") or 0)),
-                                 "mmHg": float(f["sbp"]), "series": "Forecast SBP"})
-            break                                   # SBP only; the chart is the SBP chart
+        # `point` and `days_ahead_est`, not `sbp`/`days_ahead` -- see forecast_frame.
+        for f in ((d.get("forecast") or {}).get("sbp") or {}).values():
+            if isinstance(f, dict) and f.get("point") is not None:
+                rows.append({
+                    "date": base + pd.Timedelta(days=float(f.get("days_ahead_est") or 0)),
+                    "mmHg": float(f["point"]), "series": "Forecast SBP"})
         pers = (d.get("personalisation") or {}).get("threshold")
         span = [pd.Timestamp(min(r["date"] for r in readings)), base + pd.Timedelta(days=4)]
         for t in span:

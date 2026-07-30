@@ -433,14 +433,23 @@ def check_bundle(promotable):
     fc = (d.get("forecast") or {}).get("sbp") or {}
     chk("*** the shipped bundle issues a forecast ***", bool(fc), d.get("confidence_tier"))
     if fc:
-        first = list(fc.values())[0]
-        v = first.get("sbp")
-        chk("    forecast is a plausible blood pressure", v is not None and 60 < v < 260, v)
-        chk("    it carries an 80% conformal interval",
-            first.get("lo") is not None and first.get("hi") is not None, first)
-        if first.get("lo") is not None:
+        # `point` / `lo80` / `hi80`, the keys BPPredictor.predict actually writes. Reading
+        # `sbp` / `lo` / `hi` here silently compared None against a range and reported a
+        # failure that was in this file, not in the model.
+        vals = [f.get("point") for f in fc.values() if isinstance(f, dict)]
+        chk("    every horizon returns a plausible blood pressure",
+            bool(vals) and all(v is not None and 60 < v < 260 for v in vals), vals)
+
+        # Exactly one node carries a band: fit_quantile_interval runs for sbp at one horizon.
+        # Asserting every node has one would be asserting something false about the bundle.
+        banded = [f for f in fc.values()
+                  if isinstance(f, dict) and f.get("lo80") is not None]
+        chk("    one horizon carries an 80% conformal interval", len(banded) >= 1,
+            f"{len(banded)} of {len(fc)} nodes banded")
+        for f in banded:
             chk("    the interval brackets the point estimate",
-                first["lo"] <= v <= first["hi"], first)
+                f["lo80"] <= f["point"] <= f["hi80"], f)
+            chk("    the interval has positive width", f["hi80"] > f["lo80"], f)
     pers = d.get("personalisation") or {}
     if pers.get("threshold") is not None:
         chk("    personalised threshold sits below the emergency floor",
