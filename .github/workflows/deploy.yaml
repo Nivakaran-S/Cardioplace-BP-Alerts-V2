@@ -194,6 +194,11 @@ jobs:
       - name: Symptom chain and the Jensen correction
         run: python tests/test_symptom_chain.py
 
+      # The subgroup gate must catch unfairness and must NOT catch difficulty. It failed a
+      # promotion on the latter, so both directions are asserted.
+      - name: Subgroup fairness gate
+        run: python tests/test_slice_gate.py
+
       - name: Test suite
         run: pytest
 
