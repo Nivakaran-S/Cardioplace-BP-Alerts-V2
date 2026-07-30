@@ -30,6 +30,7 @@ the persistence part for free and asking it for the residual is often the single
 available, and it costs one line of arithmetic.
 """
 
+import hashlib
 import sys
 
 import numpy as np
@@ -354,8 +355,39 @@ def _combined(tr: pd.DataFrame, ev: pd.DataFrame) -> pd.DataFrame:
     return both.sort_values(["series_id", "step"])
 
 
+_HOLT_CACHE: dict = {}
+
+
+def _holt_cache_key(tr: pd.DataFrame, signal: str, h: int, seed: int):
+    """Identify a training frame by content, not by object identity.
+
+    The index alone would very nearly do -- the same rows give the same histories -- but
+    hashing the signal column too means a frame that was re-sampled or re-scaled between
+    stages cannot collide with the earlier one and silently reuse its parameters.
+    """
+    idx = np.ascontiguousarray(tr.index.to_numpy())
+    col = np.ascontiguousarray(tr[signal].to_numpy(dtype=float)) if signal in tr else b""
+    dig = hashlib.blake2b(idx.tobytes(), digest_size=16)
+    dig.update(col.tobytes() if isinstance(col, np.ndarray) else col)
+    return (signal, int(h), int(seed), len(tr), dig.hexdigest())
+
+
 def _fit_holt_params(tr: pd.DataFrame, signal: str, h: int, seed=SEED) -> tuple:
-    """Grid-fit alpha/beta/phi on training rows. 18 configurations, fitted once, then frozen."""
+    """Grid-fit alpha/beta/phi on training rows. 18 configurations, fitted once, then frozen.
+
+    Memoised, and the reason is worth stating. This searches 18 configurations with a Python
+    loop over 20,000 rows, which measured as 92% of a bake-off cell on its own. It is called
+    12 times per cell with byte-identical arguments -- once for each of the three evaluation
+    arms, and again for each arm's three ensemble legs, since `holt` is one of them. Nothing
+    in the grid depends on the evaluation frame, only on `(tr, signal, h, seed)`, so all
+    twelve calls were recomputing the same triple.
+
+    The cache is keyed on training-frame content, so the tuned sweep does not inherit the
+    untuned sweep's answer unless the frame really is identical.
+    """
+    key = _holt_cache_key(tr, signal, h, seed)
+    if key in _HOLT_CACHE:
+        return _HOLT_CACHE[key]
     d = tr if len(tr) <= 20_000 else tr.sample(20_000, random_state=seed)
     target = f"y_{signal}_h{h}"
     hist = _history_map(_combined(tr, d), d.index, signal)
@@ -372,6 +404,7 @@ def _fit_holt_params(tr: pd.DataFrame, signal: str, h: int, seed=SEED) -> tuple:
                 e = float(np.mean(np.abs(pred[m] - y[m])))
                 if e < best:
                     best, best_p = e, (a, b, p)
+    _HOLT_CACHE[key] = best_p
     return best_p
 
 
