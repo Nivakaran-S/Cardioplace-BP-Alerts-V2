@@ -113,22 +113,38 @@ uv sync                     # or: pip install -r requirements.txt
 python main.py
 ```
 
-**Serve** (works with or without a trained bundle):
+**Serve** (works with or without a trained bundle). Two front ends, one advisory:
 
 ```bash
-uvicorn app:app --host 0.0.0.0 --port 7860 --workers 1
+uvicorn app:app --host 0.0.0.0 --port 7860 --workers 1   # FastAPI + the vanilla-JS SPA
+python gradio_app.py                                     # the Gradio UI the Space runs
 ```
 
 One worker, deliberately: two would mean two independently hot-reloading predictors and two
 training managers racing for the same single-flight lock.
 
+Both entry points call `src.serving.advisory.build_advisory`, so they cannot disagree about
+the same patient — `tests/test_space_contract.py` asserts they return identical advisories.
+The SPA is the richer interface and is what you get self-hosting or under Docker. The Space
+runs Gradio because **Docker Spaces require a PRO subscription** and a free account is
+refused with `402 Payment Required` at push time. ZeroGPU is deliberately not requested:
+this is a CPU-only scikit-learn workload with no GPU code path, so it would buy nothing.
+
 **Test:**
 
 ```bash
-pytest                              # or run either file directly
+pytest                              # or run any file directly
 python tests/test_safety_gates.py   # every critical gate must be able to FAIL
 python tests/test_api_contract.py   # both the no-model and with-model paths
+python tests/test_space_contract.py # the Space cannot drift from the API
+python tests/verify_run.py          # after a training run: is the model worth shipping?
 ```
+
+`verify_run.py` is the one to reach for after `python main.py`. Exit code 0 from the pipeline
+only means no exception escaped; a run can complete cleanly and still ship a forecaster that
+lost to persistence or an offset whose q90 threshold covers 60% of readings. It reads the
+artifacts and reports PASS / FAIL / WARN, where **WARN means the evidence is absent** — a
+missing report is never counted as a pass.
 
 ### Tuning the cost/quality dial
 
@@ -154,7 +170,8 @@ registered architectures compete. It changes *how many* can win, never *which* c
 | `POST` | `/api/predict` | The advisory plus every dashboard block. **200 even with no model.** |
 | `POST` | `/api/train` · `GET /api/train/status` · `POST /api/train/cancel` | Single-flight training subprocess |
 
-`src/serving/**` and `app.py` may not import `src/components/**` or `src/pipeline/**`. CI
+`src/serving/**`, `app.py` and `gradio_app.py` may not import `src/components/**` or
+`src/pipeline/**`. CI
 enforces it with a grep. That rule is what keeps a broken training module from taking down an
 API whose most important job is the one it does without any model.
 
