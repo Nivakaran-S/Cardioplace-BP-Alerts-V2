@@ -735,7 +735,7 @@ class BPPredictor:
             return "cold_start"
         return "bootstrapping" if n < c.steady_state_readings else "steady"
 
-    def predict(self, history: pd.DataFrame, as_of=None) -> dict:
+    def predict(self, history: pd.DataFrame, as_of=None, feature_row=None) -> dict:
         """One patient's raw session history -> a serialisable advisory."""
         try:
             t0 = time.perf_counter()
@@ -779,8 +779,14 @@ class BPPredictor:
                 out["latency_ms"] = round((time.perf_counter() - t0) * 1000, 1)
                 return out
 
-            row = self.fb.transform_for_inference(g, as_of=as_of)
+            # Built once and handed back on the advisory. `symptom_block` used to call
+            # `transform_for_inference` again on the identical history and reindex to the
+            # identical columns -- the same O(n) build twice per request, for no reason
+            # beyond the two living in different modules. `feature_row` is stripped before
+            # serialisation; it is a frame, not part of the payload.
+            row = feature_row if feature_row is not None else                 self.fb.transform_for_inference(g, as_of=as_of)
             X = row.reindex(columns=b["feature_names"])
+            out["_feature_row"] = row
             med_gap = float(g.ts.diff().dt.days.median() or 2)
 
             for (sig, h), mdl in b["forecasters"].items():

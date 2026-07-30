@@ -235,7 +235,8 @@ def run_safety_gates(alerts_pop, alerts_pers, OFF, advisories, cold, fairness,
                      offset_learned_max=None, shipped_forecaster=None,
                      selected_forecaster=None, shipped_detector=None,
                      cold_start_penalty=None, symptom_labels_synthetic=None,
-                     detector_alert_rate=None, pair_violation_rate=None) -> GateResult:
+                     detector_alert_rate=None, pair_violation_rate=None,
+                     forecaster_features=None) -> GateResult:
     """Evaluate every promotion gate and return the report plus the promotable flag.
 
     The trailing keyword arguments are the gates whose evidence is produced by later phases
@@ -446,6 +447,11 @@ def run_safety_gates(alerts_pop, alerts_pers, OFF, advisories, cold, fairness,
         # treating a symptom probability as an observation, so its absence is a finding --
         # not a blocking one, because the heads are excluded from promotion criteria, but a
         # bundle that has forgotten its own provenance is not shippable in silence.
+        # Extended when the symptom output began deriving from the forecast. The
+        # justification above -- "the heads are excluded from promotion criteria" -- carries
+        # less weight once a coupling exists at all, even a one-directional inference-time
+        # one, so the gate now checks the coupling is still one-directional rather than
+        # only that the flag is present.
         if symptom_labels_synthetic is None:
             g.skip("symptom labels declared synthetic", "no symptom heads in this bundle")
         else:
@@ -454,10 +460,39 @@ def run_safety_gates(alerts_pop, alerts_pers, OFF, advisories, cold, fairness,
                   "no real symptom was ever observed in HEMOBP; the flag is what keeps a "
                   "symptom probability from being read as an observation")
 
+            # The one that matters: no symptom-derived column may reach the FORECASTER's
+            # feature matrix. That is the executable form of "the BP forecast is
+            # uncontaminated by generated labels" -- an assertion rather than a claim in a
+            # docstring. `selection.py` has a dead `selection_extra_targets` hook that would
+            # break exactly this if anyone ever wired it.
+            if forecaster_features is None:
+                g.skip("no symptom-derived column reaches the forecaster",
+                       "feature list not reported by this run")
+            else:
+                leaked = sorted(c for c in forecaster_features
+                                if c.startswith("y_sym_") or c.startswith("y_"))
+                g.add("no symptom-derived column reaches the forecaster", not leaked,
+                      leaked[:5] or "none", "no y_* column",
+                      "a target-derived column in the forecaster matrix would make the "
+                      "synthetic labels an input to the real-data model")
+
         # ---- 15. the model that ships is the model that was selected ------------
+        # Compares EVERY signal, not just sbp. It used to read two scalars, so a dbp winner
+        # that failed to freeze shipped a substituted model with nothing in this report
+        # saying so -- and `fit_final` returns None for all four scope="local" kinds, which
+        # are real contenders on this corpus.
         if selected_forecaster is None or shipped_forecaster is None:
             g.skip("shipped forecaster is the selected forecaster",
                    "freeze path not reported by this run")
+        elif isinstance(selected_forecaster, dict) and isinstance(shipped_forecaster, dict):
+            diff = sorted(k for k in set(selected_forecaster) | set(shipped_forecaster)
+                          if str(selected_forecaster.get(k)) != str(shipped_forecaster.get(k)))
+            g.add("shipped forecaster is the selected forecaster", not diff,
+                  ", ".join(f"{k}: {shipped_forecaster.get(k)}" for k in diff) or "all match",
+                  ", ".join(f"{k}: {selected_forecaster.get(k)}"
+                            for k in sorted(selected_forecaster)),
+                  f"{len(diff)} signal(s) ship a model the bake-off did not select"
+                  if diff else "every signal froze cleanly")
         else:
             same = str(selected_forecaster) == str(shipped_forecaster)
             g.add("shipped forecaster is the selected forecaster", same,

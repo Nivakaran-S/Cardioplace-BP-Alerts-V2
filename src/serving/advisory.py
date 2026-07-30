@@ -103,7 +103,8 @@ def build_advisory(req, predictor, rules, blocked_note: str = "",
         if req.enrich.symptom_risk:
             t0 = time.perf_counter()
             out["symptom_risk"] = symptom_block(predictor, history, as_of,
-                                                full=req.enrich.symptom_risk_full)
+                                                full=req.enrich.symptom_risk_full,
+                                                feature_row=out.get("_feature_row"))
             T.mark("symptom", t0)
         if req.enrich.symptom_chained:
             # Alongside `symptom_risk`, never instead of it. The observed-row probability and
@@ -125,6 +126,11 @@ def build_advisory(req, predictor, rules, blocked_note: str = "",
             "still_available": ("the deterministic rule engine, which is the "
                                 "safety-critical layer and needs no model"),
         }
+
+    # The shared feature row is an internal handoff between predict() and the symptom
+    # blocks, not part of the response. Dropped here rather than in predict(), so exactly one
+    # place is responsible for what leaves this function.
+    out.pop("_feature_row", None)
 
     if trunc:
         out["truncated"] = trunc

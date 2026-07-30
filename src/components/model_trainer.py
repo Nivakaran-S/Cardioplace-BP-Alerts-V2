@@ -830,8 +830,10 @@ class ModelTrainer:
             gates = run_safety_gates(alerts_pop, alerts_pers, OFF, advisories, cold,
                                      fairness, explanation, abstain, ood_rate, config,
                                      missingness=miss,
-                                     shipped_forecaster=ship_sbp,
-                                     selected_forecaster=sel_sbp,
+                                     shipped_forecaster={
+                                         k: (v[1] if isinstance(v, (tuple, list)) else v)
+                                         for k, v in (shipped or {}).items()} or ship_sbp,
+                                     selected_forecaster=dict(winner) or sel_sbp,
                                      shipped_detector=det_name,
                                      cold_start_penalty=cold_pen,
                                      detector_alert_rate=det_rate,
@@ -841,7 +843,8 @@ class ModelTrainer:
                                          "symptom_labels_synthetic"),
                                      pair_violation_rate=(
                                          float(pair_df.violation_rate.max())
-                                         if len(pair_df) else None))
+                                         if len(pair_df) else None),
+                                     forecaster_features=predictor.b.get("feature_names"))
             save_report(config.report_path("safety_gates.csv"), gates.frame())
             gate_artifact = SafetyGateArtifact(
                 gate_report_file_path=config.report_path("safety_gates.csv"),

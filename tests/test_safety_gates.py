@@ -70,10 +70,12 @@ def test_safety_gates():
     kw = dict(alerts_pop=alerts_pop, alerts_pers=alerts_pers, OFF=OFF, advisories=[],
               cold=cold, fairness=fairness, explanation={"sbp_lag1": -3.2, "sbp_z": 0.9},
               abstain=abstain, ood_rate=ood_rate, config=cfg, missingness=missing,
-              offset_learned_max=151.0, shipped_forecaster="ridge",
-              selected_forecaster="ridge", shipped_detector="d_isoforest",
+              offset_learned_max=151.0, shipped_detector="d_isoforest",
               cold_start_penalty=1.4, symptom_labels_synthetic=True,
-              detector_alert_rate=0.048, pair_violation_rate=0.0)
+              detector_alert_rate=0.048, pair_violation_rate=0.0,
+              shipped_forecaster={"sbp": "ridge", "dbp": "hgb", "idwg": "ridge"},
+              selected_forecaster={"sbp": "ridge", "dbp": "hgb", "idwg": "ridge"},
+              forecaster_features=["sbp_lag1", "sbp_z", "pp_mean7"])
 
     good = run_safety_gates(**kw)
     print("\n--- healthy run ---")
@@ -102,7 +104,12 @@ def test_safety_gates():
 
     print("\n--- non-critical gates WARN but still promote ---")
     for name, override in {
-        "shipped != selected": dict(shipped_forecaster="hgb", selected_forecaster="local_ar"),
+        # Per SIGNAL now: a dbp winner that failed to freeze used to ship silently.
+        "shipped != selected (dbp only)": dict(
+            shipped_forecaster={"sbp": "ridge", "dbp": "ridge", "idwg": "ridge"},
+            selected_forecaster={"sbp": "ridge", "dbp": "local_ar", "idwg": "ridge"}),
+        "a target column reached the forecaster":
+            dict(forecaster_features=["sbp_lag1", "y_sym_dizziness_h0"]),
         "detector is reference": dict(shipped_detector="d_fixed_threshold"),
         "synthetic flag lost": dict(symptom_labels_synthetic=False),
         "cold-start penalty": dict(cold_start_penalty=9.0),
@@ -121,7 +128,8 @@ def test_safety_gates():
                             "missingness": None, "offset_learned_max": None,
                             "shipped_detector": None, "cold_start_penalty": None,
                             "symptom_labels_synthetic": None,
-                            "pair_violation_rate": None})
+                            "pair_violation_rate": None,
+                            "forecaster_features": None})
     f = r.frame()
     skipped = f[f.detail.str.startswith("not evaluated")]
     assert len(skipped) >= 6, f.to_string()

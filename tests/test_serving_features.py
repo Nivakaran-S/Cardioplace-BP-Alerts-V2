@@ -154,6 +154,50 @@ def _dryweight():
             b is None or not np.isfinite(b), repr(b))
 
 
+def _shared_row():
+    """predict() and symptom_block must build the feature row ONCE between them.
+
+    Counted by instrumenting the builder rather than by timing, so the check is exact and not
+    machine-dependent. Also asserts the internal handoff key never reaches the payload -- it
+    holds a DataFrame, which is neither JSON-serialisable nor anyone's business.
+    """
+    from src.serving.advisory import build_advisory
+    from src.serving.model_registry import ModelRegistry
+    from src.serving.vocabulary import build_vocabulary
+    from src.utils.ml_utils.feature.causal_features import CausalFeatureBuilder as CFB
+    from src.utils.ml_utils.rule_engine.registry import build_registry
+
+    reg = ModelRegistry()
+    reg.refresh(force=True)
+    rules = build_registry()
+    note = (build_vocabulary(rules).get("rules") or {}).get("note", "")
+    req = build_request()
+
+    calls = {"n": 0}
+    real = CFB.transform_for_inference
+
+    def counted(self, *a, **k):
+        calls["n"] += 1
+        return real(self, *a, **k)
+
+    CFB.transform_for_inference = counted
+    try:
+        d = build_advisory(req, reg.predictor, rules, note)
+    finally:
+        CFB.transform_for_inference = real
+
+    chk("the internal feature-row handoff never reaches the payload",
+        "_feature_row" not in d, sorted(d)[:12])
+    if reg.predictor is None:
+        print(f"  INFO    no bundle on disk; {calls['n']} builds, sharing exercised "
+              f"with a model only")
+    else:
+        # predict() builds one. symptom_block reuses it. The backtest and anomaly blocks use
+        # build_panel_frame, which is a different (multi-row) build and is not counted here.
+        chk("predict() and symptom_block share one row, not two",
+            calls["n"] <= 1, f"{calls['n']} transform_for_inference calls")
+
+
 def _coverage():
     """How much of the shipped feature list actually arrives? Reported, not asserted.
 
@@ -178,6 +222,7 @@ def run():
                       ("control: nothing submitted", _control_no_symptoms),
                       ("honestly absent stay absent", _honestly_absent_stay_absent),
                       ("dry weight", _dryweight),
+                      ("shared feature row", _shared_row),
                       ("coverage", _coverage)):
         print(f"\n--- {title} ---")
         fn()

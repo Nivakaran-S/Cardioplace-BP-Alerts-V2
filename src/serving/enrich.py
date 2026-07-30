@@ -254,7 +254,8 @@ def backtest_block(predictor, F) -> dict:
 
 # --------------------------------------------------------------------- symptom risk
 
-def symptom_block(predictor, history, as_of=None, full: bool = False) -> dict:
+def symptom_block(predictor, history, as_of=None, full: bool = False,
+                  feature_row=None) -> dict:
     """Model 4, or an honest statement that this bundle has no symptom heads.
 
     Scores the NEXT-session horizon only by default. A trained bundle carries a head per
@@ -284,7 +285,10 @@ def symptom_block(predictor, history, as_of=None, full: bool = False) -> dict:
                     if "_h" not in k or int(k.rsplit("_h", 1)[1]) in keep_h
                     or k.rsplit("_h", 1)[0] in reds}
 
-        row = predictor.fb.transform_for_inference(history, as_of=as_of)
+        # Reuses the row `predict()` already built when the caller passes it. This function
+        # used to rebuild it -- the same transform over the same history, twice per request.
+        row = (feature_row if feature_row is not None
+               else predictor.fb.transform_for_inference(history, as_of=as_of))
         X = row.reindex(columns=predictor.b["feature_names"])
         items = []
         for key, mdl in selected.items():
