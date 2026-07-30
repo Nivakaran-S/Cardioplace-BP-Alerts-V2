@@ -183,6 +183,17 @@ jobs:
       - name: Space contract
         run: python tests/test_space_contract.py
 
+      # 7. The joint checks. None of these need a trained bundle, which is the point --
+      #    they guard the paths that must be right BEFORE there is a model to be wrong about.
+      - name: Forecast pair coherence
+        run: python tests/test_coherence.py
+
+      - name: Serving features actually arrive
+        run: python tests/test_serving_features.py
+
+      - name: Symptom chain and the Jensen correction
+        run: python tests/test_symptom_chain.py
+
       - name: Test suite
         run: pytest
 

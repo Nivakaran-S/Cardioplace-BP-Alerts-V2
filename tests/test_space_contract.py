@@ -65,9 +65,9 @@ def _parsing():
 
 
 def _rendering():
-    b, tiles, fc, chart, eng, sym, raw = call()
-    chk("assess returns the 7 outputs the UI declares",
-        all(x is not None for x in (b, tiles, fc, chart, eng, sym, raw)))
+    b, tiles, fc, chart, eng, sym, chain, raw = call()
+    chk("assess returns the 8 outputs the UI declares",
+        all(x is not None for x in (b, tiles, fc, chart, eng, sym, chain, raw)))
     chk("banner is rendered HTML", b.startswith("<div") and "</div>" in b)
     chk("engine table has one row per reading",
         len(eng) == len(G.parse_readings(G.SAMPLE)), f"{len(eng)} rows")

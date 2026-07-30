@@ -246,6 +246,30 @@ def engine_frame(d: dict, readings: list[dict]) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def chained_frame(d: dict) -> pd.DataFrame:
+    """Symptom risk conditioned on the FORECAST -- the joint answer, one row per horizon.
+
+    `prob` is integrated over the forecast's own uncertainty where a conformal band exists.
+    `point` is what a plug-in cascade would have reported, and the gap between them is shown
+    because near the 140 mmHg threshold it is the difference between "no elevated risk" and a
+    real one -- see symptom_chain.py.
+    """
+    blk = d.get("symptom_chained") or {}
+    items = blk.get("items") or []
+    if not items:
+        return pd.DataFrame({"note": [blk.get("reason")
+                                      or "not requested; set enrich.symptom_chained"]})
+    return pd.DataFrame([{
+        "symptom": _pretty(i.get("key")),
+        "in": f"{i.get('horizon')} session(s)",
+        "predicted SBP": _num(i.get("predicted_sbp")),
+        "risk": f"{100 * float(i['prob']):.1f}%",
+        "vs point estimate": f"{100 * float(i['jensen_gap']):+.1f} pp",
+        "mechanism": i.get("mechanism") or "—",
+        "red flag": "⚑" if i.get("red_flag") else "",
+    } for i in items])
+
+
 def symptom_frame(d: dict) -> pd.DataFrame:
     blk = d.get("symptom_risk") or {}
     items = blk.get("items") or []
@@ -271,7 +295,7 @@ def assess(readings_text, patient_id, age, sex, diabetic, pregnant, hf_type, pro
         rows = parse_readings(readings_text)
     except ValueError as exc:
         return (f'<div style="color:#b3261e;font-weight:600">Could not read the history — '
-                f'{exc}</div>', "", empty, empty, empty, empty, {})
+                f'{exc}</div>', "", empty, empty, empty, empty, empty, {})
 
     # Symptoms and position are per-READING, not per-profile: the schema models what the
     # patient felt at a given measurement. The form asks "right now", so they attach to the
@@ -308,12 +332,14 @@ def assess(readings_text, patient_id, age, sex, diabetic, pregnant, hf_type, pro
 
     try:
         req = PredictRequest(patient_id=patient_id or "space-user", readings=rows,
-                             profile=profile)
+                             profile=profile,
+                             enrich={"symptom_chained": True})
     except ValidationError as exc:
         first = exc.errors()[0]
         loc = ".".join(str(x) for x in first.get("loc", []))
         return (f'<div style="color:#b3261e;font-weight:600">Rejected by validation — '
-                f'{loc}: {first.get("msg")}</div>', "", empty, empty, empty, empty, {})
+                f'{loc}: {first.get("msg")}</div>', "", empty, empty, empty, empty, empty,
+                {})
 
     REGISTRY.refresh()
     try:
@@ -322,10 +348,11 @@ def assess(readings_text, patient_id, age, sex, diabetic, pregnant, hf_type, pro
     except Exception as exc:                                          # noqa: BLE001
         logging.exception("space assessment failed")
         return (f'<div style="color:#b3261e;font-weight:600">Scoring failed — '
-                f'{type(exc).__name__}</div>', "", empty, empty, empty, empty, {})
+                f'{type(exc).__name__}</div>', "", empty, empty, empty, empty, empty, {})
 
     return (banner_html(d), tiles_md(d), forecast_frame(d), chart_frame(d, rows),
-            engine_frame(d, rows), symptom_frame(d), to_jsonable(d))
+            engine_frame(d, rows), symptom_frame(d), chained_frame(d),
+            to_jsonable(d))
 
 
 # --------------------------------------------------------------------------- layout
@@ -334,6 +361,21 @@ DISCLAIMER = """
 > **Not a medical device.** This is a research prototype for provider-visible decision
 > support. It does not diagnose, and it must not be used to make a treatment decision.
 > Trained on the HEMOBP haemodialysis corpus, which is a specific population.
+"""
+
+CHAIN_NOTE = """
+**This is the forecast-conditioned answer** — the symptom heads scored on the *predicted*
+vitals rather than on today's, so it reads as one statement: *next session, SBP 158 and this
+much symptom risk.*
+
+`vs point estimate` is the correction for the forecast's own uncertainty. It matters most just
+below the 140 mmHg threshold, where a plug-in point estimate reports **exactly zero** excess
+risk. No alert flag is raised here: the operating cut was chosen on observed rows and does not
+carry its budget meaning to a forecast-conditioned one.
+
+Only the systolic and weight-gain drivers are forecast, so the four hypotensive-mechanism
+symptoms — dizziness, syncope, palpitations, fatigue — gain nothing from this view, and
+diastolic pressure does not enter the symptom model at all.
 """
 
 SYNTH_WARNING = """
@@ -429,7 +471,12 @@ def build_demo():
                     eng_tbl = gr.Dataframe(wrap=True)
                 with gr.Tab("Symptom risk"):
                     gr.Markdown(SYNTH_WARNING)
+                    gr.Markdown("**Today** — the heads scored on the observed history.")
                     sym_tbl = gr.Dataframe(wrap=True)
+                with gr.Tab("Predicted symptoms"):
+                    gr.Markdown(SYNTH_WARNING)
+                    gr.Markdown(CHAIN_NOTE)
+                    chain_tbl = gr.Dataframe(wrap=True)
                 with gr.Tab("Raw response"):
                     gr.Markdown("Identical to the `POST /api/predict` body — same function.")
                     raw = gr.JSON()
@@ -444,12 +491,12 @@ def build_demo():
                  inputs=[readings, patient_id, age, sex, diabetic, pregnant, hf_type,
                          provider_target, conditions, medications, position, missed_3d,
                          adherence_7d, *sym_boxes],
-                 outputs=[banner, tiles, fc_tbl, chart, eng_tbl, sym_tbl, raw])
+                 outputs=[banner, tiles, fc_tbl, chart, eng_tbl, sym_tbl, chain_tbl, raw])
         demo.load(_assess,
                   inputs=[readings, patient_id, age, sex, diabetic, pregnant, hf_type,
                           provider_target, conditions, medications, position, missed_3d,
                           adherence_7d, *sym_boxes],
-                  outputs=[banner, tiles, fc_tbl, chart, eng_tbl, sym_tbl, raw])
+                  outputs=[banner, tiles, fc_tbl, chart, eng_tbl, sym_tbl, chain_tbl, raw])
     return demo
 
 

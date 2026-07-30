@@ -162,6 +162,9 @@ pytest                              # or run any file directly
 python tests/test_safety_gates.py   # every critical gate must be able to FAIL
 python tests/test_api_contract.py   # both the no-model and with-model paths
 python tests/test_space_contract.py # the Space cannot drift from the API
+python tests/test_coherence.py      # the predicted (sbp, dbp) pair is a real blood pressure
+python tests/test_serving_features.py  # submitted data reaches the feature row
+python tests/test_symptom_chain.py  # symptom risk conditioned on the forecast
 python tests/verify_run.py          # after a training run: is the model worth shipping?
 ```
 
