@@ -249,8 +249,19 @@ def backtest_block(predictor, F) -> dict:
 
 # --------------------------------------------------------------------- symptom risk
 
-def symptom_block(predictor, history, as_of=None) -> dict:
-    """Model 4, or an honest statement that this bundle has no symptom heads."""
+def symptom_block(predictor, history, as_of=None, full: bool = False) -> dict:
+    """Model 4, or an honest statement that this bundle has no symptom heads.
+
+    Scores the NEXT-session horizon only by default. A trained bundle carries a head per
+    (symptom x horizon) -- 45 on this cohort -- and each is a CalibratedClassifierCV wrapping
+    a gradient booster, scored one row at a time because they are different models and cannot
+    be batched. Measured, that was 1,028 ms: more than 60% of the whole request, against the
+    10-25 ms this was originally costed at.
+
+    Horizon 0 is the actionable one -- what is likely at the next session -- and the longer
+    horizons are a research view, so they sit behind `enrich.symptom_risk_full` rather than
+    on the default path. Red flags are never dropped by this filter.
+    """
     models = predictor.b.get("symptom_models") if predictor is not None else None
     if not models:
         return {"available": False, "labels_are_synthetic": True, "items": [],
@@ -261,26 +272,38 @@ def symptom_block(predictor, history, as_of=None) -> dict:
         cuts = predictor.b.get("symptom_cuts") or {}
         mech = predictor.b.get("symptom_mechanism") or {}
         reds = set(predictor.b.get("symptom_red_flags") or [])
+
+        horizons = sorted({int(k.rsplit("_h", 1)[1]) for k in models if "_h" in k})
+        keep_h = set(horizons) if full else {horizons[0]} if horizons else set()
+        selected = {k: m for k, m in models.items()
+                    if "_h" not in k or int(k.rsplit("_h", 1)[1]) in keep_h
+                    or k.rsplit("_h", 1)[0] in reds}
+
         row = predictor.fb.transform_for_inference(history, as_of=as_of)
         X = row.reindex(columns=predictor.b["feature_names"])
         items = []
-        for key, mdl in models.items():
+        for key, mdl in selected.items():
             try:
                 p = float(mdl.predict_proba(X)[0, 1])
             except Exception:                                         # noqa: BLE001
                 continue
             cut = float(cuts.get(key, np.nan))
-            items.append({"key": key, "label": LABELS.get(key, key),
+            base = key.rsplit("_h", 1)[0]
+            items.append({"key": key, "label": LABELS.get(base, base),
+                          "horizon": int(key.rsplit("_h", 1)[1]) + 1 if "_h" in key else None,
                           "prob": round(p, 4),
                           "cut": round(cut, 4) if np.isfinite(cut) else None,
                           "flagged": bool(np.isfinite(cut) and p >= cut),
-                          "mechanism": mech.get(key), "red_flag": key in reds})
+                          "mechanism": mech.get(key), "red_flag": base in reds})
         # Red flags first, then by how far past its own cut each one sits. Never averaged
         # into a mechanism score: a red flag next to fatigue is not half a red flag.
-        items.sort(key=lambda d: (not d["red_flag"],
-                                  -(d["prob"] - (d["cut"] or 0))))
+        items.sort(key=lambda d: (not d["red_flag"], -(d["prob"] - (d["cut"] or 0))))
         return {"available": True, "labels_are_synthetic": True, "items": items,
                 "warning": SYNTHETIC_WARNING,
+                "scored": len(selected), "trained": len(models), "full": bool(full),
+                "note": ("next-session horizon plus every red flag; set "
+                         "enrich.symptom_risk_full for all horizons" if not full
+                         else "all horizons"),
                 "n_flagged": sum(1 for i in items if i["flagged"])}
     except Exception as exc:                                         # noqa: BLE001
         logging.exception("symptom block failed")

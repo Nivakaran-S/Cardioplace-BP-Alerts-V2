@@ -77,7 +77,12 @@ def _startup():
 
 @app.get("/")
 def index(request: Request):
-    return templates.TemplateResponse("index.html", {"request": request})
+    # Request first. Starlette's old `TemplateResponse(name, context)` signature is gone in
+    # current releases -- passing the name first makes it the `request` argument and the
+    # context dict becomes the template name, which surfaces as an unhashable-dict TypeError
+    # from deep inside Jinja's cache. Older releases accept this form too, so it is the one
+    # that works across the range `fastapi>=0.141.1` actually resolves to.
+    return templates.TemplateResponse(request, "index.html")
 
 
 @app.get("/api/schema")
@@ -187,7 +192,8 @@ def api_predict(req: PredictRequest):
                 T.mark("backtest", t0)
         if req.enrich.symptom_risk:
             t0 = time.perf_counter()
-            out["symptom_risk"] = symptom_block(predictor, history, as_of)
+            out["symptom_risk"] = symptom_block(predictor, history, as_of,
+                                                full=req.enrich.symptom_risk_full)
             T.mark("symptom", t0)
     else:
         out["predicted_alert"] = {"horizons": [], "basis": "no model loaded",

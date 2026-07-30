@@ -116,6 +116,10 @@ class EnrichFlags(_Base):
     anomaly: bool = True
     backtest: bool = True
     symptom_risk: bool = True
+    #: Score every horizon rather than just the next session. Off by default:
+    #: the full set is 45 separate calibrated models scored one row at a time,
+    #: measured at ~1s, which is most of the request.
+    symptom_risk_full: bool = False
 
 
 class PredictRequest(_Base):
