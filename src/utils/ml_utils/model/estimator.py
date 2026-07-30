@@ -436,25 +436,45 @@ def grid_search(F: pd.DataFrame, features: list, config, best_params: dict,
 
 def tune(F: pd.DataFrame, features: list, config, best_params: dict,
          seed: int = SEED) -> pd.DataFrame:
-    """Dispatch to the configured tuner, falling back loudly rather than silently.
+    """Dispatch to the configured tuner. Refuse to silently substitute a weaker one.
 
     The notebook this is ported from had `TUNER = "optuna"` inside a bare try/except import,
     so a machine without optuna quietly ran a 12-draw random search instead of a 40-trial TPE
-    study and reported it as tuning. The fallback here is logged at WARNING for that reason.
+    study and reported it as tuning. This function used to log that at WARNING and continue --
+    and that was not enough: it happened again here, on a machine whose `pyproject.toml` and
+    `requirements.txt` both pin `optuna>=4.0`. A single WARNING inside a four-hour run is not a
+    signal anyone reads, and the resulting board looks entirely normal: 144 fits instead of
+    1,440, no error, every report populated.
+
+    So an explicitly configured tuner that cannot be honoured is now a hard failure. Asking for
+    TPE and getting random search is a different experiment, not a degraded one, and the run
+    that produced it is not the run the config describes. Set `TUNER = "random"` to choose the
+    12-draw search deliberately -- that path is supported, it just has to be chosen.
+
+    The realised tuner is returned on the frame as a `tuner` column so the artifact records
+    what actually ran rather than what was requested.
     """
     tuner = str(getattr(config, "tuner", "random")).lower()
     if tuner == "optuna":
         try:
             import optuna  # noqa: F401
-        except ImportError:
-            logging.warning("optuna is not installed; falling back to a %d-draw random "
-                            "search. `pip install optuna` for the TPE study the config asks "
-                            "for.", config.tune_draws)
-            tuner = "random"
+        except ImportError as exc:
+            raise CustomException(
+                ImportError(
+                    "TUNER is 'optuna' but optuna is not importable, and it is pinned in both "
+                    "pyproject.toml and requirements.txt -- the environment is out of sync "
+                    "with the declared dependencies. Install it (`uv pip install optuna`), or "
+                    "set TUNER = 'random' to choose the "
+                    f"{config.tune_draws}-draw search deliberately. Refusing to substitute a "
+                    "weaker search silently: the board would be indistinguishable from a "
+                    "genuine TPE run."), sys) from exc
     fn = {"optuna": optuna_search, "grid": grid_search}.get(tuner, random_search)
     logging.info("tuning with %s over %d families x %d signals",
                  tuner, len(_tunable_kinds(config)), len(config.signals))
-    return fn(F, features, config, best_params, seed)
+    out = fn(F, features, config, best_params, seed)
+    if len(out):
+        out["tuner"] = tuner
+    return out
 
 
 def fit_quantile_interval(F: pd.DataFrame, features: list, config, best_params: dict,
