@@ -207,5 +207,24 @@ jobs:
             --exclude "notebooks/*" \
             --exclude "**/__pycache__/*" \
             --exclude "*.tmp"
+
+          # Factory-reboot on every push, deliberately, because an ordinary build reuses
+          # cached Docker layers and those layers pin the base image. That is not a
+          # hypothetical: `python_version: "3.11"` landed on the Space, HF's metadata
+          # reported 3.11, and the build still ran `FROM python:3.10.13` off the cache and
+          # died on `numpy==2.4.2` with the same error as before the fix. A plain rebuild
+          # cannot be trusted to honour a config change, so we never take a plain rebuild.
+          #
+          # The cost is real and accepted: no layer cache means the full pip install runs
+          # every deploy, torch included. Slower, and tighter on free-tier build memory.
+          python - <<'PY'
+          import os
+          from huggingface_hub import HfApi
+          space = os.environ["HF_SPACE"]
+          # restart_space, not request_space_restart -- the latter does not exist in
+          # huggingface_hub 1.x and fails with AttributeError.
+          rt = HfApi(token=os.environ["HF_TOKEN"]).restart_space(space, factory_reboot=True)
+          print(f"Factory reboot requested for {space}; stage is now {rt.stage}")
+          PY
           echo "Deployed. The Space runs rule-engine-only until a promoted"
           echo "final_model/model.pkl is present -- see the README's degraded-path note."
