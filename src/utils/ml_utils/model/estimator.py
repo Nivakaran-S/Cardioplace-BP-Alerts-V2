@@ -153,22 +153,47 @@ def run_sweep(F: pd.DataFrame, features: list, config, params: dict = None, seed
             for kind in kinds:
                 spec = MODEL_SPEC[kind]
                 tr = tr_own if spec["scope"] == "local" else tr_fit
-                for label, part in arms:
-                    if len(part) < 40:
-                        continue
+                scored = [(lab, p) for lab, p in arms if len(p) >= 40]
+                if not scored:
+                    continue
+                # `score_architecture` fits AND predicts in one call, so scoring each arm
+                # separately refits the identical model three times -- 38.7s instead of
+                # 12.4s for gradient boosting on this cohort. Where it is safe, the three
+                # arms are concatenated and scored in a single fit.
+                #
+                # It is NOT safe for every family, and that was verified rather than
+                # assumed. The classical smoothers rebuild each patient's history from the
+                # frame handed to them, so widening that frame changes their output: holt
+                # moved by up to 56 mmHg, and the ensembles inherit it through their holt
+                # leg. Tabular, reparam, window, scope and local families agree to 1.5e-05
+                # mmHg, which is float noise. Those get one fit; the rest keep per-arm
+                # scoring, because a 3x speedup is not worth silently changing a forecast.
+                one_fit = spec["family"] not in ("classical", "ensemble")
+                batches = ([("__all__", pd.concat([p for _lab, p in scored]))] if one_fit
+                           else scored)
+                preds_by_batch, failed = [], False
+                for _lab, frame in batches:
                     try:
-                        pred = score_architecture(kind, tr, part, signal, h, config,
-                                                  features, params, seed)
+                        preds_by_batch.append(np.asarray(
+                            score_architecture(kind, tr, frame, signal, h, config,
+                                               features, params, seed), dtype=float))
                     except Exception as exc:                          # noqa: BLE001
                         # One architecture failing must not take the bake-off down with it;
                         # the failure is recorded so it cannot be mistaken for absence.
-                        logging.warning("%s failed on %s h%s (%s): %s",
-                                        kind, signal, h, label, exc)
+                        logging.warning("%s failed on %s h%s: %s", kind, signal, h, exc)
                         rows.append(dict(model=kind, family=spec["family"],
                                          cost=spec["cost"], scope=spec["scope"],
-                                         signal=signal, horizon=h, split=label,
+                                         signal=signal, horizon=h, split="all",
                                          note=f"{type(exc).__name__}: {exc}"[:160]))
-                        continue
+                        failed = True
+                        break
+                if failed:
+                    continue
+                all_pred = np.concatenate(preds_by_batch)
+
+                off = 0
+                for label, part in scored:
+                    pred, off = all_pred[off:off + len(part)], off + len(part)
                     r = evaluate(part[target].values, pred,
                                  part[f"{signal}_lag1"].values, model=kind,
                                  family="learned", cost=spec["cost"], scope=spec["scope"],
