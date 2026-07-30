@@ -64,10 +64,14 @@ jobs:
                   importlib.import_module(m.name)
               except Exception as e:
                   bad.append(f"{m.name}: {type(e).__name__}: {e}")
-          try:
-              importlib.import_module("app")
-          except Exception as e:
-              bad.append(f"app: {type(e).__name__}: {e}")
+          # Both entry points: `app` is the FastAPI/SPA one, `gradio_app` is what the
+          # Hugging Face Space actually launches. A Space that fails to import is a Space
+          # that shows a stack trace to every visitor.
+          for entry in ("app", "gradio_app"):
+              try:
+                  importlib.import_module(entry)
+              except Exception as e:
+                  bad.append(f"{entry}: {type(e).__name__}: {e}")
           print("\n".join(bad) or "all modules import")
           sys.exit(1 if bad else 0)
           PY
@@ -76,14 +80,14 @@ jobs:
       #    whenever a training module does, which defeats the whole no-model design.
       - name: Layering guard
         run: |
-          if grep -rnE '^\s*(from|import)\s+src\.(components|pipeline)' src/serving app.py; then
-            echo "::error::src/serving and app.py must not import src.components or src.pipeline"
+          if grep -rnE '^\s*(from|import)\s+src\.(components|pipeline)' src/serving app.py gradio_app.py; then
+            echo "::error::src/serving and the entry points must not import src.components or src.pipeline"
             exit 1
           fi
           echo "layering respected"
 
       - name: Lint
-        run: ruff check src app.py main.py tests
+        run: ruff check src app.py gradio_app.py main.py tests
 
       # 3. Dependency files must agree. They had already drifted once.
       - name: Dependency reconciliation
@@ -98,7 +102,9 @@ jobs:
           bad = []
           if a - b: bad.append(f"in pyproject only: {sorted(a-b)}")
           if b - a: bad.append(f"in requirements only: {sorted(b-a)}")
-          for banned in ("gradio", "dagshub"):
+          # dagshub only: it was imported and never called. gradio is back on purpose --
+          # the Space runs `sdk: gradio` because Docker Spaces need a PRO subscription.
+          for banned in ("dagshub",):
               if banned in a or banned in b: bad.append(f"{banned} should have been removed")
           print("\n".join(bad) or f"{len(a)} dependencies agree")
           sys.exit(1 if bad else 0)
@@ -114,6 +120,11 @@ jobs:
       #    must still produce an emergency with nothing on disk.
       - name: API contract
         run: python tests/test_api_contract.py
+
+      # 6. The Space is a second front end over the same advisory. This asserts it cannot
+      #    drift into disagreeing with /api/predict about the same patient.
+      - name: Space contract
+        run: python tests/test_space_contract.py
 
       - name: Test suite
         run: pytest

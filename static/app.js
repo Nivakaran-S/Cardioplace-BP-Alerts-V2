@@ -215,7 +215,7 @@
     chip.className = "chip " + (eng.is_emergency ? "chip-critical"
                      : eng.fired ? "chip-warning" : "chip-good");
     $("v-engine-note").textContent = eng.rule_id
-      ? pretty(eng.rule_id) + (eng.mode === "PERSONALIZED" ? " · personalised" : "")
+      ? pretty(eng.rule_id) + (eng.axis_mode === "PERSONALIZED" ? " · personalised" : "")
       : (eng.gate_reason && eng.gate_reason !== "NONE"
          ? "gated: " + pretty(eng.gate_reason) : "nothing fired on this reading");
 

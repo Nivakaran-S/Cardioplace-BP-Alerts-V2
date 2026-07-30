@@ -18,32 +18,19 @@ construction.
 """
 
 import os
-import time
 import uuid
 
-import pandas as pd
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from src.constants.training_pipeline import EMERGENCY_FLOOR_MMHG, POPULATION_THRESHOLD_MMHG
 from src.exception.custom_exception import CustomException
 from src.logging.logger import logging
 from src.serving import settings as S
-from src.serving.enrich import (
-    Timer,
-    anomaly_block,
-    backtest_block,
-    build_panel_frame,
-    history_echo,
-    predicted_alert_block,
-    rule_engine_block,
-    symptom_block,
-)
+from src.serving.advisory import build_advisory
 from src.serving.jsonify import to_jsonable
-from src.serving.mapping import to_engine_panel, to_history
 from src.serving.model_registry import ModelRegistry
 from src.serving.schemas import PredictRequest
 from src.serving.training import TrainingManager
@@ -117,113 +104,14 @@ def api_predict(req: PredictRequest):
     is conditional, `forecast` is keyed by signal, `personalisation` is passed straight
     through from OffsetModel. A declared response model would silently DROP any key it did
     not know about, which is the worst available failure mode for a clinical payload.
+
+    The assembly lives in `src/serving/advisory.py` because the Hugging Face Space
+    (`gradio_app.py`) needs the identical sequence, and two front ends each assembling their
+    own advisory is how a banner and a chart start disagreeing about the same patient.
     """
-    T = Timer()
     REGISTRY.refresh()
-    predictor = REGISTRY.predictor
-    as_of = pd.Timestamp(req.as_of) if req.as_of else None
-
-    history = to_history(req)
-    # Enrichments run over a bounded tail; predict() still sees everything, because its cost
-    # is one vectorised build while the blocks below are O(n) in model calls.
-    trunc = None
-    hist_enrich = history
-    if len(history) > S.ENRICH_READING_CAP:
-        hist_enrich = history.tail(S.ENRICH_READING_CAP).reset_index(drop=True)
-        trunc = {"submitted": len(history), "enrichment_readings": len(hist_enrich)}
-
-    # ---- core advisory --------------------------------------------------------
-    t0 = time.perf_counter()
-    if predictor is not None:
-        advisory = predictor.predict(history, as_of=as_of)
-    else:
-        last_ts = history.ts.max()
-        now = as_of or last_ts
-        advisory = {
-            "patient_id": req.patient_id, "as_of": str(now), "model_version": None,
-            "n_observations": int(history.sbp.notna().sum()),
-            "confidence_tier": "no_model", "personalisation": None, "forecast": {},
-            "early_warning": None,
-            # From the constants, not from a bundle: the floor is a governance value and
-            # does not stop existing because no model is loaded.
-            "emergency_floor_mmHg": EMERGENCY_FLOOR_MMHG,
-            "staleness": {"last_reading": str(last_ts),
-                          "days_since_last_reading": round(
-                              float((now - last_ts).total_seconds() / 86400.0), 1)},
-            "note": "no trained model is loaded; the rule engine below is unaffected",
-        }
-    T.mark("predict", t0)
-
-    threshold = (advisory.get("personalisation") or {}).get("threshold")
-    if threshold is None and req.profile.provider_target is not None:
-        threshold = float(req.profile.provider_target)
-
-    out = dict(advisory)
-    out["history"] = history_echo(req)
-
-    # ---- rule engine ----------------------------------------------------------
-    t0 = time.perf_counter()
-    panel = to_engine_panel(req, hist_enrich, threshold)
-    out["rule_engine"] = (rule_engine_block(RULES, panel, threshold, BLOCKED_NOTE)
-                          if req.enrich.rule_engine else None)
-    T.mark("engine", t0)
-
-    # ---- model-dependent blocks ------------------------------------------------
-    if predictor is not None:
-        if req.enrich.predicted_alert:
-            t0 = time.perf_counter()
-            out["predicted_alert"] = predicted_alert_block(RULES, panel, advisory, threshold)
-            T.mark("predicted_alert", t0)
-        if req.enrich.anomaly or req.enrich.backtest:
-            t0 = time.perf_counter()
-            try:
-                F = build_panel_frame(predictor, hist_enrich)
-            except Exception as exc:                                 # noqa: BLE001
-                logging.warning("feature frame unavailable: %s", exc)
-                F = None
-            T.mark("frame", t0)
-            if F is not None and req.enrich.anomaly:
-                t0 = time.perf_counter()
-                out["anomaly"] = anomaly_block(predictor, F, hist_enrich, advisory)
-                T.mark("anomaly", t0)
-            if F is not None and req.enrich.backtest:
-                t0 = time.perf_counter()
-                out["backtest"] = backtest_block(predictor, F)
-                T.mark("backtest", t0)
-        if req.enrich.symptom_risk:
-            t0 = time.perf_counter()
-            out["symptom_risk"] = symptom_block(predictor, history, as_of,
-                                                full=req.enrich.symptom_risk_full)
-            T.mark("symptom", t0)
-    else:
-        out["predicted_alert"] = {"horizons": [], "basis": "no model loaded",
-                                  "symptom_note": ""}
-        out["anomaly"] = None
-        out["backtest"] = None
-        out["symptom_risk"] = symptom_block(None, history)
-        out["degraded"] = {
-            "model_loaded": False,
-            "reason": REGISTRY.health()["detail"],
-            "remedy": "run `python main.py`, or POST /api/train",
-            "still_available": ("the deterministic rule engine, which is the "
-                                "safety-critical layer and needs no model"),
-        }
-
-    if trunc:
-        out["truncated"] = trunc
-    timings = T.total()
-    budget = float(getattr(getattr(predictor, "config", None), "latency_budget_ms",
-                           200.0) or 200.0)
-    out["timings"] = timings
-    # The budget was written for the serving path -- BPPredictor.predict -- not for the
-    # dashboard extras. Judging the total against it would be measuring against a number
-    # that was never about the total.
-    out["budget"] = {"latency_budget_ms": budget,
-                     "core_within_budget": timings.get("predict_ms", 0) <= budget,
-                     "scope": "predict() only; the dashboard blocks are extra"}
-    out["governance"] = {"population_threshold_mmHg": POPULATION_THRESHOLD_MMHG,
-                         "emergency_floor_mmHg": EMERGENCY_FLOOR_MMHG}
-    return to_jsonable(out)
+    return to_jsonable(build_advisory(req, REGISTRY.predictor, RULES, BLOCKED_NOTE,
+                                      degraded_reason=REGISTRY.health()["detail"]))
 
 
 # ------------------------------------------------------------------------ training

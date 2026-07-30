@@ -5,6 +5,7 @@ description = "Blood-pressure forecasting, personalised alert thresholds and ear
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "gradio==5.36.2",
     # --- pipeline -----------------------------------------------------------------
     # Hard-pinned on purpose. The serving bundle is a pickle of fitted sklearn objects,
     # and a 1.7.x runtime against a 1.8.0 pickle raises InconsistentVersionWarning --
@@ -34,8 +35,14 @@ dependencies = [
     "python-multipart>=0.0.32",
 ]
 
-# `gradio` was removed: the UI is a hand-written vanilla-JS SPA served by FastAPI, so the
-# Space runs the Docker SDK (see the Dockerfile) rather than the Gradio SDK.
+# `gradio` is back, and the reason is worth recording. The interface is a hand-written
+# vanilla-JS SPA served by FastAPI, which on a Space needs `sdk: docker` -- and Docker Spaces
+# are a PRO feature, so pushing one to a free account fails with `402 Payment Required`. The
+# Gradio SDK is free, so `gradio_app.py` renders the same advisory through Gradio components.
+# Both entry points call `src.serving.advisory.build_advisory`, so there is one implementation
+# of the clinical logic and two ways to look at it. `app.py` and the Dockerfile still work for
+# self-hosting, where the SPA is the better interface.
+#
 # `dagshub` was removed: it was imported and never called, and MLflow already reads
 # MLFLOW_TRACKING_URI from .env, which is the mechanism actually in use.
 

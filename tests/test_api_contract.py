@@ -119,6 +119,17 @@ def run():
     chk("  no forecast issued", d.get("forecast") == {})
     chk("GET /api/model -> 404", c.get("/api/model").status_code == 404)
 
+    # `current.axis_mode` is read off a pandas Series whose index carries a label named
+    # `mode` -- which is also a Series METHOD. Attribute access returns the bound method, and
+    # to_jsonable stringifies it rather than raising, so the bug is invisible in a 200 response
+    # and only shows up as a consumer that never matches. The SPA's "· personalised" marker was
+    # dead for exactly this reason. Assert the value is one the engine actually emits.
+    axis = ((d.get("rule_engine") or {}).get("current") or {}).get("axis_mode")
+    chk("  current.axis_mode is a real engine value, not a bound method",
+        axis in {"STANDARD", "PERSONALIZED", None}, repr(axis))
+    chk("  no stringified python object anywhere in the body",
+        "<bound method" not in r.content.decode() and "object at 0x" not in r.content.decode())
+
     r2 = c.post("/api/predict", json={"patient_id": "t2", "readings": hist(40, last_sbp=195),
                                       "profile": {"age": 68, "is_male": 1}})
     cur = (r2.json().get("rule_engine") or {}).get("current") or {}

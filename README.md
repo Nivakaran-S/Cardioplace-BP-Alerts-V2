@@ -3,8 +3,9 @@ title: Cardioplace BP Alerts
 emoji: 🫀
 colorFrom: indigo
 colorTo: red
-sdk: docker
-app_port: 7860
+sdk: gradio
+sdk_version: 5.36.2
+app_file: gradio_app.py
 pinned: false
 ---
 

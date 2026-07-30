@@ -76,14 +76,19 @@ def rule_engine_block(registry, panel, threshold, blocked_note="") -> dict:
                  "tier": r.tier if pd.notna(r.tier) else None,
                  "rule_id": getattr(r, "rule_id", None)}
                 for r in out.itertuples()]
-        gate = getattr(last, "gate_reason", None)
+        gate = last.get("gate_reason")
         return {
             "current": {
                 "fired": bool(last.fired),
                 "is_emergency": bool(last.is_emergency),
                 "tier": last.tier if pd.notna(last.tier) else None,
-                "rule_id": getattr(last, "rule_id", None),
-                "mode": getattr(last, "mode", None),
+                "rule_id": last.get("rule_id"),
+                # `.get`, not `getattr`. `last` is a Series and `mode` is a Series METHOD, so
+                # attribute lookup finds `Series.mode` before the column of the same name and
+                # hands back a bound method. `to_jsonable` then stringifies it instead of
+                # raising, so the payload silently carried a method repr -- with the whole row
+                # dumped inside it -- where the rule axis was supposed to be.
+                "axis_mode": last.get("mode"),
                 "gate_reason": gate if gate in GATE_REASONS else None,
             },
             "history": hist,
