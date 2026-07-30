@@ -9,6 +9,13 @@ sdk_version: 5.36.2
 # which the pinned numeric stack does not exist: numpy 2.4.2 and scipy 1.16.0 both
 # declare Requires-Python >=3.11, so the build dies at `pip install -r requirements.txt`
 # with "No matching distribution found for numpy==2.4.2".
+#
+# This key is honoured only while the Space stays on CPU hardware. ZeroGPU supports
+# exactly two interpreters, 3.12.12 and 3.10.13, and a ZeroGPU Space silently ignores
+# anything else and builds on 3.10.13 -- reintroducing the failure above with no hint
+# that this line was overridden. The deploy job pins cpu-basic on every push to keep
+# that from happening; if ZeroGPU is ever genuinely wanted, this must become "3.12.12"
+# and pyproject's requires-python must move with it.
 python_version: "3.11"
 app_file: gradio_app.py
 pinned: false
