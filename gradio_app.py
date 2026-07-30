@@ -22,6 +22,7 @@ import gradio as gr
 import pandas as pd
 from pydantic import ValidationError
 
+from src.constants.training_pipeline import EMERGENCY_FLOOR_MMHG
 from src.logging.logger import logging
 from src.serving.advisory import banner_for, build_advisory
 from src.serving.jsonify import to_jsonable
@@ -69,6 +70,13 @@ SYM_LABEL_TO_KEY = {f"{s['label']}{' ⚑' if s['red_flag'] else ''}": s["key"]
 
 SEV_COLOUR = {"critical": ("#b3261e", "#fdeceb"), "watch": ("#8a5300", "#fff6e5"),
               "info": ("#1b5e8a", "#e9f3fa"), "good": ("#1c6b3f", "#e8f5ed")}
+
+# Bounds for the optional provider target. The ceiling is derived from the emergency floor
+# rather than written as 179, so the two cannot drift: a provider target at or above the
+# floor would ask the app to treat an emergency reading as this patient's normal, and that
+# floor is the one value the governance contract says is never personalised.
+_TARGET_LO = 100
+_TARGET_HI = int(EMERGENCY_FLOOR_MMHG) - 1
 
 SAMPLE = """2026-05-01, 136, 78
 2026-05-04, 139, 80
@@ -274,7 +282,15 @@ def assess(readings_text, patient_id, age, sex, diabetic, pregnant, hf_type, pro
         "missed_3d": int(missed_3d or 0),
         "adherence_7d": float(adherence_7d) / 100.0 if adherence_7d is not None else 1.0,
     }
+    # Falsy covers both ways this optional field arrives empty: None from the initial render,
+    # and 0 from a box the user cleared. Neither is a target of 0 mmHg.
     if provider_target:
+        if not _TARGET_LO <= float(provider_target) <= _TARGET_HI:
+            return (f'<div style="color:#b3261e;font-weight:600">Provider target SBP must be '
+                    f'between {_TARGET_LO} and {_TARGET_HI} mmHg, or left blank — '
+                    f'got {_num(provider_target, 0)}. The {_num(EMERGENCY_FLOOR_MMHG, 0)} '
+                    f'emergency floor is never personalised.</div>',
+                    "", empty, empty, empty, empty, {})
         profile["provider_target"] = float(provider_target)
 
     try:
@@ -337,7 +353,11 @@ def build_demo():
 
                 with gr.Accordion("Patient profile", open=True):
                     with gr.Row():
-                        age = gr.Number(68, label="Age", minimum=18, maximum=110)
+                        # Bounds omitted for the same reason as provider_target below: a
+                        # cleared box submits 0 and Gradio would reject it before `assess`
+                        # runs. 0 falls back to the default there, and a real out-of-range
+                        # age is caught by PredictRequest and shown in the results panel.
+                        age = gr.Number(68, label="Age", info="18–110")
                         sex = gr.Radio(["Female", "Male"], value="Male", label="Sex")
                     with gr.Row():
                         diabetic = gr.Checkbox(False, label="Diabetic")
@@ -345,10 +365,18 @@ def build_demo():
                     with gr.Row():
                         hf_type = gr.Dropdown(VOCAB["hf_types"], value="NONE",
                                               label="Heart-failure type")
+                    # No minimum/maximum here, deliberately. This field is optional, and a
+                    # blank gr.Number submits 0 rather than None -- so component-level bounds
+                    # made an untouched form fail with "Value 0 is less than minimum value
+                    # 100." from inside Gradio's preprocess, before `assess` ever ran. The
+                    # range is enforced in `assess` instead, where 0 can be read as "absent"
+                    # and a genuine out-of-range entry can be reported in the results panel
+                    # like every other input problem.
                     provider_target = gr.Number(
-                        None, label="Provider target SBP (optional)", minimum=100, maximum=179,
-                        info="Overrides the population threshold when no model is loaded. "
-                             "The 180 emergency floor is never personalised.")
+                        None, label="Provider target SBP (optional)",
+                        info=f"Between {_TARGET_LO} and {_TARGET_HI}. Overrides the population "
+                             "threshold when no model is loaded. The 180 emergency floor is "
+                             "never personalised.")
 
                 with gr.Accordion("Conditions and medications", open=False):
                     conditions = gr.CheckboxGroup(list(CONDITIONS), label="Conditions")
