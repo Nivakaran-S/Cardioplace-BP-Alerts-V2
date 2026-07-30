@@ -21,6 +21,7 @@ import pandas as pd
 from src.logging.logger import logging
 from src.utils.ml_utils.feature.cadence import attach_cadence
 from src.utils.ml_utils.feature.causal_features import CausalFeatureBuilder
+from src.utils.ml_utils.model.forecast_rows import forecast_schedule
 from src.utils.ml_utils.rule_engine.engine import GATE_REASONS
 from src.utils.ml_utils.rule_engine.synthetic import ExtendedRuleEngine
 
@@ -130,14 +131,17 @@ def predicted_alert_block(registry, panel, advisory, threshold) -> dict:
         base = panel.iloc[-1]
         prev_emerg = bool(base.sbp >= 180)
         rows = []
-        for key in sorted(fc, key=lambda k: fc[k]["steps_ahead"]):
-            node = fc[key]
+        # The schedule is shared with the chained symptom path so the two cannot place the
+        # same horizon on different sessions. The ROW is still built here, because the engine
+        # needs the other axes carried forward and the feature builder must not have them.
+        for key, node, ts, steps in forecast_schedule(base.ts, base.step,
+                                                      advisory.get("forecast") or {}):
             r = base.copy()
             r["sbp"] = float(node["point"])
             if key in dbp_fc:
                 r["dbp"] = float(dbp_fc[key]["point"])
-            r["ts"] = pd.Timestamp(base.ts) + pd.Timedelta(days=node["days_ahead_est"])
-            r["step"] = int(base.step) + int(node["steps_ahead"])
+            r["ts"] = ts
+            r["step"] = int(base.step) + steps
             r["reading_age_days"] = 0.0
             # n_meas = 2 is mandatory and disclosed in `basis`. At 1 the gate returns
             # SINGLE_READING_NON_EMERGENCY and every predicted non-emergency is silenced,

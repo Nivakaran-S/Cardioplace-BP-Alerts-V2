@@ -535,7 +535,11 @@ def fit_quantile_interval(F: pd.DataFrame, features: list, config, best_params: 
 
     hgb_p = {k: v for k, v in best_params.get(("hgb", signal), {}).items() if k != "loss"}
     qmodels = {}
-    for q, name in [(.1, "lo"), (.5, "mid"), (.9, "hi")]:
+    # No median model. It was fitted, pickled into every bundle and never read by anything:
+    # serving reads only lo/hi (`predict()`), and so does the backtest. That was a third of
+    # this stage's fit cost and a third of the interval's footprint spent on a number with no
+    # consumer. The POINT forecast comes from the shipped forecaster, not from here.
+    for q, name in [(.1, "lo"), (.9, "hi")]:
         # early_stopping=False for the same reason as make_model: sklearn's automatic
         # internal holdout is drawn IID from a lagged panel, which leaks. These models
         # produce the 80% band, so a leaky stopping signal would show up as an interval

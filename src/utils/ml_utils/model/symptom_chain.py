@@ -59,6 +59,8 @@ in the payload, because "coherent joint BP and symptom prediction" implies other
 import numpy as np
 import pandas as pd
 
+from src.utils.ml_utils.model.forecast_rows import forecast_schedule
+
 #: z at the 90th percentile of the standard normal -- an 80% central interval spans +/- this.
 _Z80 = 1.2815515655446004
 
@@ -109,18 +111,22 @@ def chained_history(history: pd.DataFrame, forecast: dict, upto_h: int,
     gap = history.ts.diff().dt.days.median()
     gap = float(gap) if pd.notna(gap) and gap > 0 else 2.0
 
+    # Same schedule the rule-engine path uses, so a horizon lands on one session in both.
+    sched = {k: (node, ts) for k, node, ts, _ in
+             forecast_schedule(last.ts, 0, forecast, "sbp")}
     rows = []
     for h in range(0, int(upto_h) + 1):
-        node = sbp_fc.get(f"h{h}")
-        if not isinstance(node, dict) or node.get("point") is None:
+        entry = sched.get(f"h{h}")
+        if entry is None:
             break
+        node, sched_ts = entry
         r = {c: np.nan for c in history.columns}
         # Identity and demographics persist; they are properties of the patient, not readings.
         for c in ("patient_id", "age", "is_male", "is_dm", "DM"):
             if c in history.columns:
                 r[c] = last[c]
-        r["ts"] = pd.Timestamp(last.ts) + pd.Timedelta(
-            days=float(node.get("days_ahead_est") or (h + 1) * gap))
+        r["ts"] = (sched_ts if sched_ts is not None
+                   else pd.Timestamp(last.ts) + pd.Timedelta(days=(h + 1) * gap))
         r["sbp"] = float(node["point"]) + float(sbp_shift)
         dn = dbp_fc.get(f"h{h}")
         if isinstance(dn, dict) and dn.get("point") is not None:

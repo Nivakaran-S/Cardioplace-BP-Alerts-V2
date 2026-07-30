@@ -216,6 +216,42 @@ def _conditioning():
         "CONTEMPORANEOUS" in multi["conditioning_note"])
 
 
+def _shared_schedule():
+    """The engine path and the chain must place a horizon on the SAME session.
+
+    They build different rows on purpose -- the engine needs the other axes carried, the
+    feature builder must not have them -- but the timing arithmetic is one function now. This
+    asserts they agree, which nothing did while each computed it inline.
+    """
+    import pandas as pd
+
+    from src.utils.ml_utils.model.forecast_rows import forecast_schedule
+
+    hist = make_history()
+    adv = advisory_with([150.0, 158.0, 166.0])
+    base_ts = hist.ts.iloc[-1]
+
+    sched = forecast_schedule(base_ts, 0, adv["forecast"])
+    chk("schedule has one entry per forecast node", len(sched) == 3, len(sched))
+    chk("entries are ordered by how far ahead they sit",
+        [e[3] for e in sched] == sorted(e[3] for e in sched), [e[3] for e in sched])
+    chk("step offset is steps_ahead (h+1), not h",
+        [e[3] for e in sched] == [1, 2, 3], [e[3] for e in sched])
+
+    # The chained history must place its appended readings on exactly those timestamps.
+    ext = chained_history(hist, adv["forecast"], upto_h=2)
+    appended = list(ext.ts.iloc[-3:])
+    chk("*** the chain uses the shared schedule's timestamps ***",
+        appended == [e[2] for e in sched],
+        (appended, [e[2] for e in sched]))
+
+    # And a node with no days_ahead_est degrades rather than producing NaT.
+    bare = {"sbp": {"h0": {"point": 150.0, "steps_ahead": 1}}}
+    ext2 = chained_history(hist, bare, upto_h=0)
+    chk("a node without a day estimate still gets a real timestamp",
+        pd.notna(ext2.ts.iloc[-1]) and ext2.ts.iloc[-1] > base_ts, ext2.ts.iloc[-1])
+
+
 def _honesty():
     pred, hist = _stub()
     out = chained_symptom_risk(pred, hist, advisory_with([150.0]))
@@ -246,6 +282,7 @@ def run():
                       ("sigma from the band", _sigma),
                       ("the Jensen correction", _jensen),
                       ("conditioning on the forecast", _conditioning),
+                      ("shared horizon schedule", _shared_schedule),
                       ("honesty of the payload", _honesty)):
         print(f"\n--- {title} ---")
         fn()
