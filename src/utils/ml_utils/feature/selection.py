@@ -36,9 +36,10 @@ import pandas as pd
 from scipy.cluster import hierarchy
 from scipy.spatial.distance import squareform
 
-from src.constants.training_pipeline import SEED
+from src.constants.training_pipeline import SEED, SIGNALS
 from src.exception.custom_exception import CustomException
 from src.logging.logger import logging
+from src.utils.ml_utils.metric.regression_metric import baseline_required_columns
 
 # |r| at or above which two features are treated as one feature.
 REDUNDANCY_R: float = 0.95
@@ -65,6 +66,13 @@ MUST_KEEP: set = {
     "days_since_last",  # cadence; the model must be able to tell a 2-day gap from a 10-day one
     "is_weekend",
 }
+
+# The sbp_ewm0.3 entry above fixed this failure for ONE signal. The same trap exists for every
+# other signal a baseline can ship for, and it sprang: the EWMA baseline shipped for dbp,
+# dbp_ewm0.3 had been selected away as redundant with dbp_ewm0.1, and the dbp forecast vanished
+# from every advisory without an error. Derived from BASELINE_SPECS rather than listed, so a
+# new baseline or a new signal cannot reintroduce it.
+MUST_KEEP |= baseline_required_columns(SIGNALS)
 
 
 def _relevance(X: pd.DataFrame, targets: pd.DataFrame) -> pd.Series:

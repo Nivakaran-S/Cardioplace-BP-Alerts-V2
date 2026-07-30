@@ -793,15 +793,22 @@ class BPPredictor:
             out["_feature_row"] = row
             med_gap = float(g.ts.diff().dt.days.median() or 2)
 
+            dropped = {}
             for (sig, h), mdl in b["forecasters"].items():
                 try:
                     p = float(mdl.predict(X)[0])
-                except Exception:
+                except Exception as exc:                              # noqa: BLE001
+                    # Recorded, not swallowed. This bare `continue` hid a shipped dbp
+                    # baseline whose input column had been selected away: every advisory
+                    # returned an sbp-only forecast while the ship decision reported a dbp
+                    # gain of 0.335 mmHg, and nothing anywhere said the signal was missing.
+                    dropped[f"{sig}_h{h}"] = f"{type(exc).__name__}: {exc}"
                     continue
                 # A baseline is a closed form over lag columns, so a short history
                 # yields NaN rather than raising. NaN is not valid JSON, so it is
                 # dropped here instead of being serialised into the advisory.
                 if not np.isfinite(p):
+                    dropped[f"{sig}_h{h}"] = "prediction is not finite"
                     continue
                 # h is the target shift; the reading being predicted is h+1 readings after
                 # the last one observed, because the features at the placeholder row see
@@ -820,6 +827,17 @@ class BPPredictor:
             # The verdict is ATTACHED. The point estimate is emitted exactly as the model
             # produced it: clipping a forecast to look sensible would erase the disagreement
             # that is the actual finding.
+            if dropped:
+                missing = sorted({k.split("_h")[0] for k in dropped})
+                out["forecast_unavailable"] = {
+                    "signals": missing, "detail": dropped,
+                    "note": "these signals are in the bundle but cannot be scored on this "
+                            "input; the ship decision still reports metrics for them",
+                }
+                logging.warning("forecast unavailable for %s -- %s",
+                                ", ".join(missing),
+                                "; ".join(f"{k}: {v}" for k, v in list(dropped.items())[:3]))
+
             roll = attach_pair_coherence(
                 out["forecast"],
                 pp_ref=_first_finite(row, ("pp_mean7", "pp_lag1")),

@@ -52,6 +52,33 @@ def _iso(x, y):
     return IsotonicRegression(out_of_bounds="clip", y_min=0.0, y_max=1.0).fit(x, y)
 
 
+def venn_abers_grid(cal_scores, cal_labels, grid: int = GRID):
+    """Precompute the (score, p0, p1) curve once. Returns None if not identifiable.
+
+    Split out from `venn_abers_pairs` because it is the expensive half -- 2 isotonic fits per
+    grid point -- and it depends ONLY on the calibration set. Recomputing it per prediction
+    made `predict_proba` O(n_test * n_cal log n_cal): fine for the single fit at training
+    time, ruinous at serving, where 45 heads are scored per request. Fitted once, stored on
+    the estimator, and reduced to an interpolation at predict time.
+    """
+    s = np.asarray(cal_scores, dtype=float)
+    y = np.asarray(cal_labels, dtype=float)
+    m = np.isfinite(s) & np.isfinite(y)
+    s, y = s[m], y[m]
+    if s.size < MIN_CALIBRATION or len(np.unique(y)) < 2:
+        return None
+    q = np.unique(np.quantile(s, np.linspace(0.0, 1.0, min(grid, s.size))))
+    if q.size < 2:
+        return None
+    p0 = np.empty(q.size)
+    p1 = np.empty(q.size)
+    for i, v in enumerate(q):
+        xs = np.append(s, v)
+        p0[i] = float(_iso(xs, np.append(y, 0.0)).predict([v])[0])
+        p1[i] = float(_iso(xs, np.append(y, 1.0)).predict([v])[0])
+    return q, np.maximum.accumulate(p0), np.maximum.accumulate(p1)
+
+
 def venn_abers_pairs(cal_scores, cal_labels, test_scores, grid: int = GRID):
     """`(p0, p1)` arrays for `test_scores`. `p0 <= p1` elementwise."""
     s = np.asarray(cal_scores, dtype=float)
@@ -60,29 +87,18 @@ def venn_abers_pairs(cal_scores, cal_labels, test_scores, grid: int = GRID):
     s, y = s[m], y[m]
     t = np.asarray(test_scores, dtype=float)
 
-    if s.size < MIN_CALIBRATION or len(np.unique(y)) < 2:
+    built = venn_abers_grid(s, y, grid=grid)
+    if built is None:
         # Nothing to calibrate against. Returning the raw score as a degenerate pair would
         # claim a guarantee that does not hold, so signal absence instead.
         return None, None
+    return _interp(built, t)
 
-    # Exact pair at each grid point, then interpolate. The grid spans the calibration scores'
-    # own quantiles rather than a uniform [0, 1] cut, so resolution follows where the scores
-    # actually are -- which for a rare-event head is a narrow band near zero.
-    q = np.unique(np.quantile(s, np.linspace(0.0, 1.0, min(grid, s.size))))
-    if q.size < 2:
-        return None, None
 
-    p0 = np.empty(q.size)
-    p1 = np.empty(q.size)
-    for i, v in enumerate(q):
-        xs = np.append(s, v)
-        p0[i] = float(_iso(xs, np.append(y, 0.0)).predict([v])[0])
-        p1[i] = float(_iso(xs, np.append(y, 1.0)).predict([v])[0])
-
-    # Isotonic output is non-decreasing in the score; enforce it after interpolation too, so
-    # floating-point wobble at a plateau cannot invert the pair.
-    p0 = np.maximum.accumulate(p0)
-    p1 = np.maximum.accumulate(p1)
+def _interp(built, test_scores):
+    """Interpolate a precomputed grid at `test_scores`, keeping p0 <= p1."""
+    q, p0, p1 = built
+    t = np.asarray(test_scores, dtype=float)
     lo = np.interp(t, q, p0)
     hi = np.interp(t, q, p1)
     return np.minimum(lo, hi), np.maximum(lo, hi)
@@ -109,9 +125,9 @@ class VennAbersCalibrator(BaseEstimator, ClassifierMixin):
         self.cal_scores_ = np.asarray(
             self.base_estimator.predict_proba(X)[:, 1], dtype=float)
         self.cal_labels_ = np.asarray(y, dtype=float)
-        lo, hi = venn_abers_pairs(self.cal_scores_, self.cal_labels_,
-                                  self.cal_scores_[:1], grid=self.grid)
-        self.usable_ = lo is not None
+        # The whole cost of Venn-Abers lives here, paid once.
+        self.grid_ = venn_abers_grid(self.cal_scores_, self.cal_labels_, grid=self.grid)
+        self.usable_ = self.grid_ is not None
         return self
 
     def _raw(self, X):
@@ -119,12 +135,16 @@ class VennAbersCalibrator(BaseEstimator, ClassifierMixin):
 
     def predict_interval(self, X):
         """`(p0, p1)` per row, or `(None, None)` when the calibration set was too small."""
-        return venn_abers_pairs(self.cal_scores_, self.cal_labels_, self._raw(X),
-                                grid=self.grid)
+        if getattr(self, "grid_", None) is None:
+            return None, None
+        return _interp(self.grid_, self._raw(X))
 
     def predict_proba(self, X):
         raw = self._raw(X)
-        lo, hi = venn_abers_pairs(self.cal_scores_, self.cal_labels_, raw, grid=self.grid)
+        if getattr(self, "grid_", None) is None:
+            lo = hi = None
+        else:
+            lo, hi = _interp(self.grid_, raw)
         if lo is None:
             # Too little calibration data. Passing the raw score through is honest -- it is
             # what an uncalibrated head says -- and `usable_` records that no guarantee holds.

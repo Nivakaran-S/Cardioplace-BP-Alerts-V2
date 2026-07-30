@@ -173,12 +173,17 @@ def _equivalence():
     body = {"patient_id": "t1", "readings": rows,
             "profile": {"age": 68.0, "is_male": 1, "is_dm": 0, "is_pregnant": 0,
                         "hf_type": "NONE", "conditions": [], "medications": [],
-                        "missed_3d": 0, "adherence_7d": 1.0}}
+                        "missed_3d": 0, "adherence_7d": 1.0},
+            # The Space opts into the chained block, so the API request must too -- otherwise
+            # this compares two different questions and reports the difference as drift. The
+            # test caught exactly that when the Space started requesting it.
+            "enrich": {"symptom_chained": True}}
     api = TestClient(A.app).post("/api/predict", json=body).json()
     *_, space = call()
 
-    # Timings are wall-clock and will never match; everything else must.
-    drop = {"timings", "budget"}
+    # Wall-clock fields will never match; everything else must. `latency_ms` is measured
+    # inside predict() and belongs with `timings` rather than with the advisory's content.
+    drop = {"timings", "budget", "latency_ms"}
     a = {k: v for k, v in api.items() if k not in drop}
     s = {k: v for k, v in space.items() if k not in drop}
     same = json.dumps(a, sort_keys=True, default=str) == json.dumps(s, sort_keys=True,

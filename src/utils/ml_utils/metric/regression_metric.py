@@ -74,6 +74,27 @@ BASELINE_SPECS = {
 }
 
 
+#: The feature columns each baseline READS. Kept beside BASELINE_SPECS so the two are edited
+#: together, and consumed by feature selection: a baseline whose input has been selected away
+#: is a shipped model that raises KeyError at serving. `_lag7` is omitted because
+#: `seasonal_naive_7` already guards its own absence and falls back to NaN.
+BASELINE_REQUIRED_SUFFIXES: tuple = ("_lag1", "_lag2", "_base_mean", "_ewm0.3")
+
+
+def baseline_required_columns(signals) -> set:
+    """Columns that must survive feature selection for a baseline to be shippable.
+
+    `ship_decision` can rule that no learned model earned its place for a signal, and then a
+    BaselineForecaster serves. It is a closed form over these columns, so if selection has
+    dropped one the shipped model cannot run -- and `BPPredictor.predict` swallows the
+    KeyError per forecaster, so the signal simply disappears from the advisory with no error
+    anywhere. That is exactly what happened to dbp: MUST_KEEP protected sbp_ewm0.3 alone, the
+    EWMA baseline shipped for dbp, and the API returned an sbp-only forecast while reporting
+    a dbp gain of 0.335 mmHg in the ship decision.
+    """
+    return {f"{s}{suf}" for s in signals for suf in BASELINE_REQUIRED_SUFFIXES}
+
+
 def forecast_baselines(df: pd.DataFrame, signal: str, h: int) -> dict:
     """The floor every learned model must clear, per signal and horizon."""
     return {name: fn(df, signal, h) for name, fn in BASELINE_SPECS.items()}
