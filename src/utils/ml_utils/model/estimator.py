@@ -378,12 +378,23 @@ def optuna_search(F: pd.DataFrame, features: list, config, best_params: dict,
     import optuna
     optuna.logging.set_verbosity(optuna.logging.WARNING)
     log = []
+    # Same reason the sweep logs per cell: this stage is 4 families x 3 signals x 40 trials x
+    # 3 folds, it runs single-threaded, and it used to print nothing from start to finish. An
+    # hour of silence is indistinguishable from a hang, and the last run spent that hour
+    # quietly doing the WRONG search because optuna was missing.
+    kinds_t = _tunable_kinds(config)
+    total = len(kinds_t) * len([s for s in config.signals
+                                if f"y_{s}_h{config.horizons[0]}" in F.columns])
+    logging.info("  tuning: %d studies x %d trials x %d folds (%d model fits, before pruning)",
+                 total, config.tune_trials, config.tune_folds,
+                 total * config.tune_trials * config.tune_folds)
+    done_studies, tune_t0 = 0, time.perf_counter()
     for signal in config.signals:
         target = f"y_{signal}_h{config.horizons[0]}"
         if target not in F.columns:
             continue
         d = _tuning_frame(F, target, config, seed)
-        for kind in _tunable_kinds(config):
+        for kind in kinds_t:
             t0 = time.perf_counter()
             base = cv_score(kind, {}, d, target, features, config.tune_folds)
             try:
@@ -419,6 +430,14 @@ def optuna_search(F: pd.DataFrame, features: list, config, best_params: dict,
                            time.perf_counter() - t0, "optuna")
             row["n_pruned"] = n_pruned
             log.append(row)
+            done_studies += 1
+            gain = (base - best) if (np.isfinite(base) and np.isfinite(best)) else 0.0
+            logging.info("    [%d/%d] %-12s %-5s %5.1fs | cv %.3f -> %.3f (%+.3f) | "
+                         "%d/%d pruned", done_studies, total, kind, signal,
+                         time.perf_counter() - t0, base, best, -gain,
+                         n_pruned, config.tune_trials)
+    logging.info("  tuning done -- %.1fs across %d studies",
+                 time.perf_counter() - tune_t0, done_studies)
     return pd.DataFrame(log)
 
 
