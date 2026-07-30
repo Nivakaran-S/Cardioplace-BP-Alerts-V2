@@ -24,6 +24,7 @@ from src.serving.enrich import (
     symptom_block,
 )
 from src.serving.mapping import to_engine_panel, to_history
+from src.utils.ml_utils.model.symptom_chain import chained_symptom_risk
 
 
 def build_advisory(req, predictor, rules, blocked_note: str = "",
@@ -104,6 +105,13 @@ def build_advisory(req, predictor, rules, blocked_note: str = "",
             out["symptom_risk"] = symptom_block(predictor, history, as_of,
                                                 full=req.enrich.symptom_risk_full)
             T.mark("symptom", t0)
+        if req.enrich.symptom_chained:
+            # Alongside `symptom_risk`, never instead of it. The observed-row probability and
+            # the forecast-conditioned one answer different questions, and showing only the
+            # second would hide that the first is what the heads were actually trained for.
+            t0 = time.perf_counter()
+            out["symptom_chained"] = chained_symptom_risk(predictor, history, advisory, as_of)
+            T.mark("symptom_chained", t0)
     else:
         out["predicted_alert"] = {"horizons": [], "basis": "no model loaded",
                                   "symptom_note": ""}

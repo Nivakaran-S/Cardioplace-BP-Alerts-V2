@@ -125,6 +125,11 @@ class EnrichFlags(_Base):
     #: the full set is 45 separate calibrated models scored one row at a time,
     #: measured at ~1s, which is most of the request.
     symptom_risk_full: bool = False
+    #: Score the symptom heads on the FORECAST vitals instead of only on today's, giving one
+    #: coherent "next session: SBP 158, DBP 87, dizziness 11%" answer. Off by default because
+    #: it costs one feature build and ~15 head calls per horizon; the observed-row block is
+    #: still returned alongside it, never replaced.
+    symptom_chained: bool = False
 
 
 class PredictRequest(_Base):
