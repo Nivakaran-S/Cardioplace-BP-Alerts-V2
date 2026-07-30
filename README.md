@@ -5,6 +5,11 @@ colorFrom: indigo
 colorTo: red
 sdk: gradio
 sdk_version: 5.36.2
+# Must stay >= pyproject.toml's requires-python. The Space image defaults to 3.10, on
+# which the pinned numeric stack does not exist: numpy 2.4.2 and scipy 1.16.0 both
+# declare Requires-Python >=3.11, so the build dies at `pip install -r requirements.txt`
+# with "No matching distribution found for numpy==2.4.2".
+python_version: "3.11"
 app_file: gradio_app.py
 pinned: false
 ---

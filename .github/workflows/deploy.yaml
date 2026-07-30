@@ -110,6 +110,48 @@ jobs:
           sys.exit(1 if bad else 0)
           PY
 
+      # 3b. The Space must build on an interpreter that can satisfy the pins. This exists
+      #     because it already failed once: the Space image defaults to Python 3.10, the
+      #     README declared no `python_version`, and `pip install -r requirements.txt`
+      #     died on "No matching distribution found for numpy==2.4.2" -- numpy 2.4.2 and
+      #     scipy 1.16.0 are both >=3.11 only. CI cannot see that failure, because CI
+      #     picks its own interpreter; only this comparison links the two.
+      - name: Space interpreter guard
+        run: |
+          python - <<'PY'
+          import re, sys, tomllib, yaml
+          floor = tomllib.load(open("pyproject.toml","rb"))["project"]["requires-python"]
+          m = re.match(r">=\s*(\d+)\.(\d+)", floor)
+          if not m:
+              sys.exit(f"cannot read a >=X.Y floor out of requires-python {floor!r}")
+          want = (int(m[1]), int(m[2]))
+
+          text = open("README.md", encoding="utf-8").read()
+          if not text.startswith("---"):
+              sys.exit("README.md has no Space front matter")
+          fm = yaml.safe_load(text.split("---", 2)[1])
+          got = fm.get("python_version")
+          if got is None:
+              sys.exit(f"README front matter must set python_version (>= {want[0]}.{want[1]}); "
+                       "without it the Space image defaults to 3.10")
+          # Quote it in YAML: bare 3.10 parses as the float 3.1, which compares wrong.
+          if not isinstance(got, str):
+              sys.exit(f"python_version must be quoted in YAML; got {got!r} ({type(got).__name__})")
+          have = tuple(int(p) for p in got.split(".")[:2])
+          if have < want:
+              sys.exit(f"README python_version {got} is below requires-python {floor}; "
+                       "the Space cannot install the pinned numeric stack")
+          # setup-python above must match, or a green tick says nothing about the Space.
+          ci = yaml.safe_load(open(".github/workflows/deploy.yaml", encoding="utf-8"))
+          pins = {s["with"]["python-version"]
+                  for j in ci["jobs"].values() for s in j["steps"]
+                  if str(s.get("uses","")).startswith("actions/setup-python")}
+          if pins != {got}:
+              sys.exit(f"setup-python pins {sorted(pins)} but the Space runs {got}; "
+                       "CI must run the interpreter it is vouching for")
+          print(f"Space, CI and requires-python all agree on Python {got}")
+          PY
+
       # 4. Governance and safety gates: every critical gate must be able to FAIL. A gate
       #    that cannot fail reports PASS forever and is read as evidence.
       - name: Safety gate self-test
