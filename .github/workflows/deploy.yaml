@@ -135,9 +135,24 @@ jobs:
           if [ -z "$HF_TOKEN" ] || [ -z "$HF_SPACE" ]; then
             echo "HF_TOKEN / HF_SPACE not configured; skipping deploy"; exit 0
           fi
-          pip install -U "huggingface_hub[cli]"
-          # data/, Artifacts/, logs/ and notebooks/ are excluded: the Space needs the
-          # bundle and the app, not a 251 MB corpus or a pile of run outputs.
+          # No [cli] extra: huggingface_hub 1.x ships the `hf` entry point in the base
+          # package and warns that the extra does not exist.
+          pip install -U huggingface_hub
+          # One pattern per --exclude. The flag takes a single value, so passing several
+          # after one flag makes the rest positional and `hf upload` rejects them as
+          # unexpected extra arguments.
+          #
+          # data/ is excluded because the Space serves the model, not the corpus -- and the
+          # checkout holds LFS pointers anyway, since actions/checkout does not fetch LFS
+          # by default. Artifacts/, logs/ and mlruns/ are run outputs.
           hf upload "$HF_SPACE" . . --repo-type=space \
-            --exclude "data/*" "Artifacts/*" "logs/*" "mlruns/*" "notebooks/*" \
-                      ".venv/*" "**/__pycache__/*"
+            --commit-message "Deploy ${GITHUB_SHA::7} from ${GITHUB_REF_NAME}" \
+            --exclude "data/*" \
+            --exclude "Artifacts/*" \
+            --exclude "logs/*" \
+            --exclude "mlruns/*" \
+            --exclude "notebooks/*" \
+            --exclude "**/__pycache__/*" \
+            --exclude "*.tmp"
+          echo "Deployed. The Space runs rule-engine-only until a promoted"
+          echo "final_model/model.pkl is present -- see the README's degraded-path note."
