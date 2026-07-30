@@ -5,18 +5,23 @@ colorFrom: indigo
 colorTo: red
 sdk: gradio
 sdk_version: 5.36.2
-# Must stay >= pyproject.toml's requires-python. The Space image defaults to 3.10, on
-# which the pinned numeric stack does not exist: numpy 2.4.2 and scipy 1.16.0 both
-# declare Requires-Python >=3.11, so the build dies at `pip install -r requirements.txt`
-# with "No matching distribution found for numpy==2.4.2".
+# 3.12 is the only value that works here, and it is constrained from both sides.
 #
-# This key is honoured only while the Space stays on CPU hardware. ZeroGPU supports
-# exactly two interpreters, 3.12.12 and 3.10.13, and a ZeroGPU Space silently ignores
-# anything else and builds on 3.10.13 -- reintroducing the failure above with no hint
-# that this line was overridden. The deploy job pins cpu-basic on every push to keep
-# that from happening; if ZeroGPU is ever genuinely wanted, this must become "3.12.12"
-# and pyproject's requires-python must move with it.
-python_version: "3.11"
+# Lower bound: the pinned numeric stack does not exist below 3.11. numpy 2.4.2 and
+# scipy 1.16.0 both declare Requires-Python >=3.11, so on the 3.10 image the build dies
+# at `pip install -r requirements.txt` with "No matching distribution found for
+# numpy==2.4.2". Must stay >= pyproject.toml's requires-python.
+#
+# Upper bound: this Space runs on ZeroGPU, and ZeroGPU supports exactly two interpreters
+# -- 3.12.12 and 3.10.13. Anything else is discarded without warning and the build falls
+# back to 3.10.13, which reintroduces the failure above while HF's own metadata cheerfully
+# reports the version you asked for. "3.11" was tried and lost four builds to precisely
+# that. 3.10.13 is ruled out by the lower bound, so 3.12 is the only survivor.
+#
+# Do not "simplify" this to a CPU flavour to widen the choice: a free account cannot
+# change Space hardware through the API, which answers 402 Payment Required even for a
+# downgrade. ZeroGPU is a deliberate requirement, so the interpreter follows from it.
+python_version: "3.12"
 app_file: gradio_app.py
 pinned: false
 ---
@@ -134,8 +139,14 @@ Both entry points call `src.serving.advisory.build_advisory`, so they cannot dis
 the same patient — `tests/test_space_contract.py` asserts they return identical advisories.
 The SPA is the richer interface and is what you get self-hosting or under Docker. The Space
 runs Gradio because **Docker Spaces require a PRO subscription** and a free account is
-refused with `402 Payment Required` at push time. ZeroGPU is deliberately not requested:
-this is a CPU-only scikit-learn workload with no GPU code path, so it would buy nothing.
+refused with `402 Payment Required` at push time.
+
+The Space runs on **ZeroGPU**, which constrains the interpreter: ZeroGPU supports only
+Python 3.12.12 and 3.10.13, and the pinned numeric stack needs ≥3.11, so 3.12 is the only
+workable version — see the `python_version` note in this file's front matter. Hardware
+cannot be changed from CI to widen that choice; the API returns `402` on a free account
+even for a downgrade. Note that no code path is decorated with `@spaces.GPU`: this is a
+scikit-learn workload, so ZeroGPU is never actually allocated a GPU at run time.
 
 **Test:**
 

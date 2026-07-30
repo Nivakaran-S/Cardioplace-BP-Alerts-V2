@@ -43,7 +43,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.12"
           cache: pip
 
       - name: Install
@@ -110,12 +110,21 @@ jobs:
           sys.exit(1 if bad else 0)
           PY
 
-      # 3b. The Space must build on an interpreter that can satisfy the pins. This exists
-      #     because it already failed once: the Space image defaults to Python 3.10, the
-      #     README declared no `python_version`, and `pip install -r requirements.txt`
-      #     died on "No matching distribution found for numpy==2.4.2" -- numpy 2.4.2 and
-      #     scipy 1.16.0 are both >=3.11 only. CI cannot see that failure, because CI
-      #     picks its own interpreter; only this comparison links the two.
+      # 3b. The Space must build on an interpreter that can satisfy the pins AND that its
+      #     hardware actually supports. Both bounds are here because both were learned the
+      #     hard way, over five failed builds with a byte-identical error message:
+      #
+      #       * floor -- the Space image defaults to 3.10 and the README set no
+      #         `python_version`, so `pip install -r requirements.txt` died on "No matching
+      #         distribution found for numpy==2.4.2" (numpy 2.4.2, scipy 1.16.0: >=3.11).
+      #       * ceiling -- setting "3.11" did not fix it. This Space runs ZeroGPU, which
+      #         supports only 3.12.12 and 3.10.13; anything else is discarded and the build
+      #         silently falls back to 3.10.13 while the Hub API reports the requested
+      #         version back to you. Cheerful metadata over a broken build is why this took
+      #         five cycles, and why the ceiling is asserted rather than trusted.
+      #
+      #     CI cannot observe either failure -- it picks its own interpreter -- so this
+      #     comparison is the only thing linking a green tick to a Space that can build.
       - name: Space interpreter guard
         run: |
           python - <<'PY'
@@ -141,12 +150,18 @@ jobs:
           if have < want:
               sys.exit(f"README python_version {got} is below requires-python {floor}; "
                        "the Space cannot install the pinned numeric stack")
+          # Compared at (major, minor): ZeroGPU documents 3.12.12, and "3.12" resolves to it.
+          ZEROGPU_SUPPORTED = {(3, 12), (3, 10)}
+          if have not in ZEROGPU_SUPPORTED:
+              sys.exit(f"README python_version {got} is not a ZeroGPU interpreter "
+                       f"{sorted(ZEROGPU_SUPPORTED)}; a ZeroGPU Space ignores it and builds "
+                       "on 3.10.13 instead, which cannot install the pinned stack")
           # setup-python above must match, or a green tick says nothing about the Space.
           ci = yaml.safe_load(open(".github/workflows/deploy.yaml", encoding="utf-8"))
           pins = {s["with"]["python-version"]
                   for j in ci["jobs"].values() for s in j["steps"]
                   if str(s.get("uses","")).startswith("actions/setup-python")}
-          if pins != {got}:
+          if {tuple(int(p) for p in v.split(".")[:2]) for v in pins} != {have}:
               sys.exit(f"setup-python pins {sorted(pins)} but the Space runs {got}; "
                        "CI must run the interpreter it is vouching for")
           print(f"Space, CI and requires-python all agree on Python {got}")
@@ -179,7 +194,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.12"
       - name: Push to the Space
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
@@ -208,35 +223,21 @@ jobs:
             --exclude "**/__pycache__/*" \
             --exclude "*.tmp"
 
-          # Pin the hardware to cpu-basic, then factory-reboot. Both on every push, and the
-          # hardware line is the one that actually matters.
+          # Factory-reboot on every push, so a config change is never silently served from
+          # cached layers.
           #
-          # ZeroGPU pins the interpreter. HF's ZeroGPU docs list exactly two supported Python
-          # versions -- 3.12.12 and 3.10.13 -- so a ZeroGPU Space physically cannot honour
-          # `python_version: "3.11"`. It falls back to the 3.10.13 base image with no warning,
-          # and the pinned numeric stack does not exist there: numpy 2.4.2 and scipy 1.16.0
-          # are both >=3.11 only. Four builds failed byte-identically on `numpy==2.4.2`
-          # before this was found, and the giveaway was a build with every layer reported as
-          # `cache miss` that still ran `FROM python:3.10.13` -- which is what ruled out the
-          # Docker layer cache and pointed at hardware-driven base-image selection instead.
-          #
-          # cpu-basic is also simply what this workload is: scikit-learn with no GPU code
-          # path, as the README states. Dropping ZeroGPU also drops the injected
-          # torch==2.11.0 and spaces== from the image, which makes the build far lighter.
-          #
-          # Failing loudly here is deliberate. A token that cannot set hardware must not
-          # leave a green tick over a Space still building on the wrong interpreter -- that
-          # silence is exactly what cost four build cycles.
+          # Do NOT add request_space_hardware here. It was tried, and HF answers
+          # `402 Payment Required` -- "Without a PRO subscription, you can't downgrade this
+          # Space to cpu-basic" -- so a free account cannot change Space hardware through the
+          # API at all, not even downwards. The interpreter is therefore chosen to suit the
+          # hardware rather than the other way round; see README's python_version note.
           python - <<'PY'
           import os
-          from huggingface_hub import HfApi, SpaceHardware
-          api = HfApi(token=os.environ["HF_TOKEN"])
+          from huggingface_hub import HfApi
           space = os.environ["HF_SPACE"]
-          rt = api.request_space_hardware(space, SpaceHardware.CPU_BASIC)
-          print(f"Hardware pinned to {SpaceHardware.CPU_BASIC.value} (was: {rt.requested_hardware})")
           # restart_space, not request_space_restart -- the latter does not exist in
           # huggingface_hub 1.x and fails with AttributeError.
-          rt = api.restart_space(space, factory_reboot=True)
+          rt = HfApi(token=os.environ["HF_TOKEN"]).restart_space(space, factory_reboot=True)
           print(f"Factory reboot requested for {space}; stage is now {rt.stage}")
           PY
           echo "Deployed. The Space runs rule-engine-only until a promoted"
