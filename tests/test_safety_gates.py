@@ -76,6 +76,7 @@ def test_safety_gates():
               shipped_forecaster={"sbp": "ridge", "dbp": "hgb", "idwg": "ridge"},
               selected_forecaster={"sbp": "ridge", "dbp": "hgb", "idwg": "ridge"},
               forecaster_features=["sbp_lag1", "sbp_z", "pp_mean7"],
+              shipped_families={"sbp": "learned", "dbp": "learned", "idwg": "learned"},
               symptom_fairness=pd.DataFrame({"symptom": ["dizziness", "dizziness"],
                                              "axis": ["sex", "sex"],
                                              "level": ["male", "female"],
@@ -106,6 +107,32 @@ def test_safety_gates():
         r = run_safety_gates(**{**kw, **override})
         assert not r.promotable, f"{name}: gate did not bite"
         print(f"  {name:24s} -> BLOCKED ({r.critical_failures})")
+
+    print("\n--- a deliberate BASELINE ship is not a freeze failure ---")
+    # ship_decision can rule that no learned model earned its place, and then a baseline
+    # serves. That is the rule working; gate 15 exists for the winner failing to FREEZE.
+    # Generalising the gate per signal conflated the two and reported dbp's legitimate
+    # baseline as an unselected model. Both directions asserted here, because "does not
+    # warn" is only the right behaviour if the real failure still does.
+    baseline_ship = run_safety_gates(**{
+        **kw,
+        "shipped_forecaster": {"sbp": "ridge", "dbp": "ewma", "idwg": "ridge"},
+        "selected_forecaster": {"sbp": "ridge", "dbp": "huber", "idwg": "ridge"},
+        "shipped_families": {"sbp": "learned", "dbp": "baseline", "idwg": "learned"}})
+    f15 = baseline_ship.frame()
+    row = f15[f15.gate == "shipped forecaster is the selected forecaster"].iloc[0]
+    assert row.status == "PASS", f"a baseline ship must not warn: {row.to_dict()}"
+    print("  dbp ships the baseline by decision -> PASS (not called unselected)")
+
+    froze_badly = run_safety_gates(**{
+        **kw,
+        "shipped_forecaster": {"sbp": "ridge", "dbp": "ridge", "idwg": "ridge"},
+        "selected_forecaster": {"sbp": "ridge", "dbp": "local_ar", "idwg": "ridge"},
+        "shipped_families": {"sbp": "learned", "dbp": "learned", "idwg": "learned"}})
+    f15b = froze_badly.frame()
+    row_b = f15b[f15b.gate == "shipped forecaster is the selected forecaster"].iloc[0]
+    assert row_b.status == "WARN", f"a freeze failure must still warn: {row_b.to_dict()}"
+    print("  learned winner could not freeze    -> WARN (still caught)")
 
     print("\n--- non-critical gates WARN but still promote ---")
     for name, override in {

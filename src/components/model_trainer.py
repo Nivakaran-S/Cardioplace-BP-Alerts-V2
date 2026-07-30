@@ -899,7 +899,11 @@ class ModelTrainer:
                                          float(pair_df.violation_rate.max())
                                          if len(pair_df) else None),
                                      forecaster_features=predictor.b.get("feature_names"),
-                                     symptom_fairness=sym_fair)
+                                     symptom_fairness=sym_fair,
+                                     shipped_families={
+                                         k: (v[0] if isinstance(v, (tuple, list)) else
+                                             "learned")
+                                         for k, v in (shipped or {}).items()})
             save_report(config.report_path("safety_gates.csv"), gates.frame())
             gate_artifact = SafetyGateArtifact(
                 gate_report_file_path=config.report_path("safety_gates.csv"),

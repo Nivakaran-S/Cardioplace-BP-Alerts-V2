@@ -236,7 +236,8 @@ def run_safety_gates(alerts_pop, alerts_pers, OFF, advisories, cold, fairness,
                      selected_forecaster=None, shipped_detector=None,
                      cold_start_penalty=None, symptom_labels_synthetic=None,
                      detector_alert_rate=None, pair_violation_rate=None,
-                     forecaster_features=None, symptom_fairness=None) -> GateResult:
+                     forecaster_features=None, symptom_fairness=None,
+                     shipped_families=None) -> GateResult:
     """Evaluate every promotion gate and return the report plus the promotable flag.
 
     The trailing keyword arguments are the gates whose evidence is produced by later phases
@@ -485,7 +486,17 @@ def run_safety_gates(alerts_pop, alerts_pers, OFF, advisories, cold, fairness,
             g.skip("shipped forecaster is the selected forecaster",
                    "freeze path not reported by this run")
         elif isinstance(selected_forecaster, dict) and isinstance(shipped_forecaster, dict):
-            diff = sorted(k for k in set(selected_forecaster) | set(shipped_forecaster)
+            # Only signals shipping a LEARNED model are compared. `ship_decision` can rule
+            # that no learned model earned its place and ship the baseline instead -- that is
+            # the rule working, not the winner failing to freeze, and this gate exists for the
+            # latter. Generalising it per signal exposed the conflation: dbp legitimately
+            # ships baseline:ewma and was reported as an unselected model.
+            learned = set(shipped_families or {}) and {
+                k for k, fam in (shipped_families or {}).items() if fam == "learned"}
+            keys = (set(selected_forecaster) | set(shipped_forecaster))
+            if shipped_families:
+                keys &= learned
+            diff = sorted(k for k in keys
                           if str(selected_forecaster.get(k)) != str(shipped_forecaster.get(k)))
             g.add("shipped forecaster is the selected forecaster", not diff,
                   ", ".join(f"{k}: {shipped_forecaster.get(k)}" for k in diff) or "all match",

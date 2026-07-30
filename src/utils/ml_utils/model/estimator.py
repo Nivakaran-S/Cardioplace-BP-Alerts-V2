@@ -834,9 +834,19 @@ class BPPredictor:
                     "note": "these signals are in the bundle but cannot be scored on this "
                             "input; the ship decision still reports metrics for them",
                 }
-                logging.warning("forecast unavailable for %s -- %s",
-                                ", ".join(missing),
-                                "; ".join(f"{k}: {v}" for k, v in list(dropped.items())[:3]))
+                # Once per bundle, not once per patient. The advisory stage scores ~40
+                # patients in a loop and a batch job scores thousands; an unthrottled line
+                # here produced 60 identical warnings in one stage and drowned the log it
+                # was added to make readable. The payload still carries the detail on every
+                # response -- this is the operator-facing copy, and repeating it says
+                # nothing the first one did not.
+                sig = tuple(missing)
+                if getattr(self, "_warned_unavailable", None) != sig:
+                    self._warned_unavailable = sig
+                    logging.warning(
+                        "forecast unavailable for %s -- %s (logged once per bundle)",
+                        ", ".join(missing),
+                        "; ".join(f"{k}: {v}" for k, v in list(dropped.items())[:3]))
 
             roll = attach_pair_coherence(
                 out["forecast"],
