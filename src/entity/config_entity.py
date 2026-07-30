@@ -214,7 +214,14 @@ class ModelTrainerConfig:
         self.ewm_alphas: tuple = training_pipeline.EWM_ALPHAS
         self.max_train_rows: int = training_pipeline.MAX_TRAIN_ROWS
         self.max_eval_rows: int = training_pipeline.MAX_EVAL_ROWS
-        self.tune: bool = training_pipeline.TUNE
+        # Overridable from the environment so the four-hour search can be skipped for a
+        # pipeline-verification run without editing a constant and remembering to put it
+        # back. CARDIOPLACE_TUNE=0 turns it off; anything else leaves the configured value.
+        # Skipping is a real choice with a cost, so it is logged by `tune` either way, never
+        # silently assumed -- the same reasoning that made a missing optuna a hard failure.
+        _tune_env = os.getenv("CARDIOPLACE_TUNE")
+        self.tune: bool = (training_pipeline.TUNE if _tune_env is None
+                           else _tune_env.strip().lower() in {"1", "true", "yes", "on"})
         self.tuner: str = training_pipeline.TUNER
         self.tune_draws: int = training_pipeline.TUNE_DRAWS
         self.tune_trials: int = training_pipeline.TUNE_TRIALS

@@ -36,6 +36,7 @@ import yaml  # noqa: E402
 from src.constants.training_pipeline import (  # noqa: E402
     ALERT_BUDGET_PCT,
     EMERGENCY_FLOOR_MMHG,
+    MODEL_TRAINER_REPORT_DIR,
     OFFSET_CAP_LOOSEN,
     OFFSET_CAP_TIGHTEN,
     POPULATION_THRESHOLD_MMHG,
@@ -169,18 +170,31 @@ def check_model1(art, rep):
 
         mae = col(board, "MAE", "mae")
         fam = col(board, "family")
+        sig = col(board, "signal")
         if mae and fam and sp:
+            # Per SIGNAL. The three are in different units -- sbp and dbp in mmHg, idwg in
+            # kg -- so a min() across all of them compared 0.44 kg against a 1.0 mmHg leak
+            # floor and reported a leak that was a unit mismatch in this file.
             te = board[board[sp] == "test"]
-            learned = te[te[fam] == "learned"]
-            basel = te[te[fam] == "baseline"]
-            if not learned.empty and not basel.empty:
+            for s_name in (sorted(te[sig].unique()) if sig else [None]):
+                part = te if s_name is None else te[te[sig] == s_name]
+                learned = part[part[fam] == "learned"]
+                basel = part[part[fam] == "baseline"]
+                if learned.empty or basel.empty:
+                    continue
                 bl, bb = learned[mae].min(), basel[mae].min()
-                chk("*** the best learned model beats the best baseline on test ***",
-                    bl < bb, f"learned {bl:.3f} vs baseline {bb:.3f} mmHg")
-                print(f"         best learned {bl:.3f} | best baseline {bb:.3f} mmHg")
-                # An MAE of 0 would mean the target leaked into the features.
-                chk("    and its MAE is not implausibly small (leak check)",
-                    bl > 1.0, f"{bl:.4f} mmHg")
+                unit = "kg" if s_name == "idwg" else "mmHg"
+                lbl = f" [{s_name}]" if s_name else ""
+                chk(f"*** best learned beats best baseline on test{lbl} ***",
+                    bl < bb, f"learned {bl:.3f} vs baseline {bb:.3f} {unit}")
+                print(f"         {s_name or 'all':<5} best learned {bl:.3f} | "
+                      f"best baseline {bb:.3f} {unit}")
+                # A near-zero error would mean the target leaked. The floor scales with the
+                # signal, because 0.44 is alarming in mmHg and unremarkable in kg.
+                floor = 0.05 if s_name == "idwg" else 1.0
+                chk(f"    MAE not implausibly small{lbl} (leak check)",
+                    bl > floor, f"{bl:.4f} {unit} vs floor {floor}")
+            learned = te[te[fam] == "learned"]
 
             # Cold start: the unseen-patient arm is the only measure of what a new user gets.
             ho = board[(board[sp] == "holdout_pt") & (board[fam] == "learned")]
@@ -224,9 +238,20 @@ def check_tuning(rep):
         dcol = col(cmp_, "cv_mae_default", "mae_default", "default")
         tcol = col(cmp_, "cv_mae_tuned", "mae_tuned", "tuned")
         if dcol and tcol:
-            worse = cmp_[cmp_[tcol].astype(float) > cmp_[dcol].astype(float) + 1e-9]
-            chk("*** tuning never selected a config worse than the default ***",
+            # `beyond_noise` is the pipeline's own bootstrap verdict on whether a difference
+            # exceeds the CI width. Asserting exact monotonicity instead flagged three idwg
+            # rows that were 0.001-0.034 kg worse inside a 0.05 kg interval -- resampling
+            # noise reported as a tuning regression. Tuning guards its CV score; the sweep
+            # re-scores on a different split, so tiny movement in both directions is expected.
+            nb = col(cmp_, "beyond_noise")
+            worse = cmp_[cmp_[tcol].astype(float) > cmp_[dcol].astype(float)]
+            if nb is not None:
+                worse = worse[worse[nb].astype(str).str.upper().isin(["TRUE", "1"])]
+            chk("*** tuning never made a model worse beyond noise ***",
                 worse.empty, worse.to_string(index=False)[:400])
+            n_noise = int((cmp_[tcol].astype(float) > cmp_[dcol].astype(float)).sum())
+            print(f"         {n_noise} rows nominally worse, none beyond the bootstrap CI"
+                  if worse.empty else "")
     log = load(os.path.join(rep, "tuning_log.csv"), "tuning log")
     if log is not None:
         print(f"\n         {len(log)} tuning rows")
@@ -332,9 +357,14 @@ def check_evaluation(rep):
             chk(f"p95 serving latency within the {budget} ms budget",
                 float(p95) <= float(budget), f"{p95} ms")
 
-    par = load(os.path.join(rep, "walk_forward_parity.csv"), "walk-forward parity")
+    par = None
+    for cand in ("serving_parity.yaml", "walk_forward_parity.yaml",
+                 "walk_forward_parity.csv"):
+        if os.path.exists(os.path.join(rep, cand)):
+            par = load(os.path.join(rep, cand), "walk-forward parity")
+            break
     if par is None:
-        par = load(os.path.join(rep, "walk_forward_parity.yaml"), "walk-forward parity")
+        rec("WARN", "walk-forward parity: report absent", "serving_parity.yaml")
     if isinstance(par, dict):
         print(f"         {json.dumps(par)[:300]}")
         chk("train/serve parity verdict is consistent",
@@ -473,7 +503,16 @@ def main():
     if not art:
         print("no Artifacts/ directory -- run `python main.py` first")
         return 1
-    rep = os.path.join(art, "model_trainer", "report")
+    # Derived from the constant the trainer itself writes with, not spelled out here. This
+    # said "report" while the trainer wrote "reports", so every check reported its evidence
+    # ABSENT -- the tool's one job is telling presence from absence, and it had that backwards
+    # for every report at once. A hardcoded path was the whole cause.
+    rep = os.path.join(art, "model_trainer", MODEL_TRAINER_REPORT_DIR)
+    if not os.path.isdir(rep):
+        alt = [d for d in glob.glob(os.path.join(art, "model_trainer", "*"))
+               if os.path.isdir(d) and os.path.basename(d) != "trained_model"]
+        if alt:
+            rep = alt[0]
     print(f"verifying {art}")
     print(f"reports   {rep}" + ("" if os.path.isdir(rep) else "   (ABSENT)"))
 
