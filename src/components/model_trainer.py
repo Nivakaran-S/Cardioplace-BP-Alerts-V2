@@ -67,10 +67,10 @@ from src.utils.ml_utils.model.detector import (
     widen_detector_set,
 )
 from src.utils.ml_utils.model.estimator import (
-    MODEL_KINDS,
     BaselineForecaster,
     BPPredictor,
     champion_challenger,
+    enabled_kinds,
     explain_prediction,
     fit_quantile_interval,
     make_model,
@@ -111,6 +111,17 @@ for _var in ("MLFLOW_TRACKING_URI", "MLFLOW_TRACKING_USERNAME", "MLFLOW_TRACKING
     _val = os.getenv(_var)
     if _val:
         os.environ[_var] = _val
+
+
+def _log_candidates_enabled() -> bool:
+    """Whether to log the ~136 non-final candidate runs.
+
+    Off by default. Against a remote tracking server each nested run was measured at roughly
+    75 seconds, so the full catalogue adds hours of network latency after the modelling has
+    already finished. Read in exactly one place: this switch previously existed twice with
+    opposite defaults, so the log said "finals only" while candidates were still uploading.
+    """
+    return os.getenv("MLFLOW_LOG_CANDIDATES", "0").strip().lower() in {"1", "true", "yes", "on"}
 
 
 class ModelTrainer:
@@ -171,8 +182,7 @@ class ModelTrainer:
         the tracking store agree with itself no matter what was selected -- there was no
         way to see what a choice was made against, which is most of what a run is for.
         """
-        if selection != "final" and os.getenv("MLFLOW_LOG_CANDIDATES", "1").strip().lower() \
-                in {"0", "false", "no", "off"}:
+        if selection != "final" and not _log_candidates_enabled():
             return False
         try:
             with mlflow.start_run(run_name=name, nested=True):
@@ -219,8 +229,7 @@ class ModelTrainer:
         # So the default is now finals-only. The shipped models are what anyone actually
         # opens; the full catalogue is a deliberate opt-in via MLFLOW_LOG_CANDIDATES=1,
         # which is the right way round for something that can triple a run's wall clock.
-        finals_only = os.getenv("MLFLOW_LOG_CANDIDATES", "0").strip().lower() not in {
-            "1", "true", "yes", "on"}
+        finals_only = not _log_candidates_enabled()
         if finals_only:
             logging.info("mlflow: logging shipped models only. Set MLFLOW_LOG_CANDIDATES=1 "
                          "for the full candidate catalogue (~136 nested runs; slow against "
@@ -334,9 +343,10 @@ class ModelTrainer:
     # ------------------------------------------------------------------ forecaster
     def train_forecasters(self, F, features, config):
         """Bake-off across the registry, tuning, then the paired ship decision."""
+        kinds = enabled_kinds(config.model_tier)
         logging.info("architecture bake-off: %d candidates at tier '%s' -- %s",
-                     len(MODEL_KINDS), config.model_tier, ", ".join(MODEL_KINDS))
-        with timer(f"default sweep ({len(MODEL_KINDS)} architectures)"):
+                     len(kinds), config.model_tier, ", ".join(kinds))
+        with timer(f"default sweep ({len(kinds)} architectures)"):
             R_default, preds_default, _ = run_sweep(F, features, config)
         if R_default.empty:
             raise ValueError("the sweep produced no scorable rows; the cohort is too small")
@@ -396,8 +406,9 @@ class ModelTrainer:
         # production, scoring these detectors against a learned forecaster would rank
         # them on a model no request will ever see.
         forecaster, fc_target = None, f"y_sbp_h{config.horizons[0]}"
-        family, name = (shipped or {}).get("sbp", ("learned", winner.get("sbp",
-                                                                         MODEL_KINDS[-1])))
+        # "ridge" as the fallback, not MODEL_KINDS[-1]: that index is whatever the enabled
+        # tier happens to end with (an ensemble at medium) and can be absent entirely at low.
+        family, name = (shipped or {}).get("sbp", ("learned", winner.get("sbp", "ridge")))
         try:
             if family == "baseline":
                 forecaster = BaselineForecaster(name, "sbp", config.horizons[0])
