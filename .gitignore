@@ -27,3 +27,6 @@ mlruns/
 *.pkl
 # write-then-rename leaves these behind only if a run is killed mid-save
 *.tmp
+
+# Local Claude Code tool-permission state, not project configuration.
+.claude/

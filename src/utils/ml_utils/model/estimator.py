@@ -150,9 +150,19 @@ def run_sweep(F: pd.DataFrame, features: list, config, params: dict = None, seed
                                        part[f"{signal}_lag1"].values,
                                        part.series_id.to_numpy())
 
+            # The bake-off is by far the longest stage, and without this it produces no
+            # output between "19 candidates" and the finished board -- 25 minutes during
+            # which a wedged run and a working one look identical. One line per cell, plus a
+            # line for any single architecture slow enough to be worth knowing about.
+            cell_t0, cell_cost = time.perf_counter(), {}
+            logging.info("  sweep %s h%s: %d architectures | train %s / val %s / test %s / "
+                         "holdout_pt %s", signal, h, len(kinds), f"{len(tr_fit):,}",
+                         f"{len(va):,}", f"{len(te):,}", f"{len(ho):,}")
+
             for kind in kinds:
                 spec = MODEL_SPEC[kind]
                 tr = tr_own if spec["scope"] == "local" else tr_fit
+                kind_t0 = time.perf_counter()
                 scored = [(lab, p) for lab, p in arms if len(p) >= 40]
                 if not scored:
                     continue
@@ -207,6 +217,16 @@ def run_sweep(F: pd.DataFrame, features: list, config, params: dict = None, seed
                         preds[kind] = (part[target].values, np.asarray(pred, float),
                                        part[f"{signal}_lag1"].values,
                                        part.series_id.to_numpy())
+
+                cell_cost[kind] = time.perf_counter() - kind_t0
+                if cell_cost[kind] > 20.0:
+                    logging.info("    %-22s %5.1fs%s", kind, cell_cost[kind],
+                                 "" if one_fit else "  (per-arm: classical/ensemble)")
+
+            slowest = sorted(cell_cost.items(), key=lambda kv: -kv[1])[:3]
+            logging.info("  sweep %s h%s done -- %.1fs | slowest: %s", signal, h,
+                         time.perf_counter() - cell_t0,
+                         ", ".join(f"{k} {v:.1f}s" for k, v in slowest))
     return pd.DataFrame(rows), preds, fitted
 
 
