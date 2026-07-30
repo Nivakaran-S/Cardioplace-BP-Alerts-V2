@@ -49,6 +49,7 @@ from src.utils.ml_utils.metric.timeseries_metric import (
     slice_gate,
     tier_metrics,
 )
+from src.utils.ml_utils.model.chain_eval import run_chain_evaluation
 from src.utils.ml_utils.model.classifier_head import (
     build_classifier_frame,
     train_symptom_heads,
@@ -727,11 +728,63 @@ class ModelTrainer:
                              "clean" if worst == 0 else
                              "; ".join(r for r in pair_df.top_reasons if r))
 
+            # ---- 9c. the chained symptom path: cuts, its shift, and a board --------
+            # Runs HERE, after the freeze, not inside train_symptom_heads. The heads are
+            # trained at 7b and the forecasters do not exist until 9, so there is nothing to
+            # chain from at head-training time -- and measuring the frozen forecaster is the
+            # more honest choice anyway.
+            chain_board, chain_shift_df, chain_cuts = (pd.DataFrame(), pd.DataFrame(), {})
+            try:
+                with timer("chained symptom evaluation"):
+                    chain_board, chain_shift_df, chain_cuts = run_chain_evaluation(
+                        panel, F, predictor, features, config, seed=config.seed)
+            except Exception as exc:                                  # noqa: BLE001
+                logging.warning("chained symptom evaluation skipped: %s", exc)
+            if len(chain_board):
+                save_report(config.report_path("symptom_chain_board.csv"), chain_board)
+                wins = int(chain_board.chained_wins.sum())
+                logging.info("[SYNTHETIC LABELS] chained vs direct: %d of %d heads improve on "
+                             "a paired test; %d beat the patient's own 30-session rate",
+                             wins, len(chain_board),
+                             int(chain_board.beats_personal_rate.sum()))
+            if len(chain_shift_df):
+                save_report(config.report_path("symptom_chain_shift.csv"), chain_shift_df)
+            if chain_cuts:
+                # Stored beside the observed-row cuts, never replacing them: the two apply to
+                # different input distributions and the serving path picks by which it used.
+                predictor.b["symptom_cuts_chained"] = chain_cuts
+                predictor.b["symptom_chain"] = {
+                    "n_rows": int(len(chain_board)),
+                    "shift_max_psi": (float(chain_shift_df.psi.max())
+                                      if len(chain_shift_df) and "psi" in chain_shift_df
+                                      else None),
+                    "note": "cuts refitted on chained rows; the observed-row cut does not "
+                            "carry its alert-budget meaning to this distribution",
+                }
+                predictor.save(config.bundle_file_path)
+
             # ---- 10. fairness ----------------------------------------------------
             fairness = self.run_fairness(F, features, config, winner, M_hold,
                                          D_test, det_report, shipped)
             if len(fairness):
                 save_report(config.report_path("fairness.csv"), fairness)
+
+            # ---- 10b. subgroup parity of the symptom heads ------------------------
+            # Deliberately NOT folded into `fairness` above. Gate 5 is critical, and a
+            # subgroup disparity in a GENERATED hazard model must never block promotion of a
+            # forecaster validated on real blood pressure. The generator has structural
+            # asymmetries by construction -- frailty is drawn Beta(2,5), on_bb shifts heart
+            # rate -- so this is a live risk, not a hypothetical one. Reported, gated
+            # non-critically, kept in its own file.
+            sym_fair = pd.DataFrame()
+            try:
+                sym_fair = self.symptom_fairness(F, predictor, config)
+            except Exception as exc:                                  # noqa: BLE001
+                logging.warning("symptom fairness unavailable: %s", exc)
+            if len(sym_fair):
+                save_report(config.report_path("symptom_fairness.csv"), sym_fair)
+                logging.info("[SYNTHETIC LABELS] symptom subgroup parity: %d of %d slices "
+                             "within margin", int(sym_fair.passes.sum()), len(sym_fair))
 
             # ---- 11. advisories, abstention, explainability -----------------------
             probe_id = panel.series_id.iloc[0]
@@ -844,7 +897,8 @@ class ModelTrainer:
                                      pair_violation_rate=(
                                          float(pair_df.violation_rate.max())
                                          if len(pair_df) else None),
-                                     forecaster_features=predictor.b.get("feature_names"))
+                                     forecaster_features=predictor.b.get("feature_names"),
+                                     symptom_fairness=sym_fair)
             save_report(config.report_path("safety_gates.csv"), gates.frame())
             gate_artifact = SafetyGateArtifact(
                 gate_report_file_path=config.report_path("safety_gates.csv"),
@@ -984,6 +1038,53 @@ class ModelTrainer:
             raise CustomException(e, sys)
 
     # ------------------------------------------------------------------ fairness
+    def symptom_fairness(self, F, predictor, config) -> pd.DataFrame:
+        """PR-AUC of each symptom head by demographic slice, on the test split.
+
+        Separate from `run_fairness` on purpose -- see the call site. `slice_gate` is reused
+        unchanged so the margin semantics match the forecaster's, but the metric is PR-AUC
+        rather than mmHg, and a failing row here is a finding about `symptom_layer.py`, not
+        about a patient.
+        """
+        from sklearn.metrics import average_precision_score
+        models = predictor.b.get("symptom_models") or {}
+        te = F[F.split == "test"] if "split" in F else F
+        if not models or not len(te):
+            return pd.DataFrame()
+        X = te.reindex(columns=predictor.b["feature_names"])
+        rows = []
+        slices = [("sex", te.is_male.map({1: "male", 0: "female"}))] if "is_male" in te else []
+        if "age" in te:
+            slices.append(("age", pd.cut(te.age, [0, 55, 70, 200],
+                                         labels=["<55", "55-70", "70+"]).astype(str)))
+        for key in sorted(k for k in models if k.endswith("_h0")):
+            base = key.rsplit("_h", 1)[0]
+            tgt = f"y_sym_{base}_h0"
+            if tgt not in te.columns:
+                continue
+            try:
+                p = np.asarray(models[key].predict_proba(X)[:, 1], dtype=float)
+            except Exception:                                         # noqa: BLE001
+                continue
+            for axis, lab in slices:
+                for level in sorted(set(lab.dropna())):
+                    m = (lab == level).to_numpy() & te[tgt].notna().to_numpy() & np.isfinite(p)
+                    y = te[tgt].to_numpy(dtype=float)[m]
+                    if m.sum() < 100 or y.sum() < 5:
+                        continue
+                    rows.append(dict(symptom=base, axis=axis, level=level, n=int(m.sum()),
+                                     base_rate=round(float(y.mean()), 5),
+                                     pr_auc=round(float(average_precision_score(y, p[m])), 4),
+                                     labels="SYNTHETIC"))
+        if not rows:
+            return pd.DataFrame()
+        out = pd.DataFrame(rows)
+        # Within-symptom, within-axis spread against the same margin the forecaster uses.
+        out["spread"] = out.groupby(["symptom", "axis"]).pr_auc.transform(
+            lambda v: float(v.max() - v.min()))
+        out["passes"] = out.spread <= float(getattr(config, "fair_margin_pp", 0.15))
+        return out
+
     def run_fairness(self, F, features, config, winner, M_hold, D_test, det_report,
                      shipped=None):
         """Subgroup performance for the forecaster, the offset and the best detector.

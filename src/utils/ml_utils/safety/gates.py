@@ -236,7 +236,7 @@ def run_safety_gates(alerts_pop, alerts_pers, OFF, advisories, cold, fairness,
                      selected_forecaster=None, shipped_detector=None,
                      cold_start_penalty=None, symptom_labels_synthetic=None,
                      detector_alert_rate=None, pair_violation_rate=None,
-                     forecaster_features=None) -> GateResult:
+                     forecaster_features=None, symptom_fairness=None) -> GateResult:
     """Evaluate every promotion gate and return the report plus the promotable flag.
 
     The trailing keyword arguments are the gates whose evidence is produced by later phases
@@ -533,6 +533,23 @@ def run_safety_gates(alerts_pop, alerts_pers, OFF, advisories, cold, fairness,
                   f"<= {config.pair_violation_max}",
                   "sbp and dbp ship independently selected architectures; this is the only "
                   "check on what they say together")
+
+        # ---- 18. subgroup parity of the SYMPTOM heads --------------------------
+        # Kept out of critical gate 5 on purpose. Gate 5 blocks promotion, and a disparity in
+        # a generated hazard model must never veto a forecaster validated on real blood
+        # pressure. The generator has subgroup asymmetries by construction -- frailty drawn
+        # Beta(2,5), on_bb shifting heart rate -- so a failing row here is a finding about
+        # symptom_layer.py, not about a patient or about the model that ships.
+        if symptom_fairness is None or not len(symptom_fairness):
+            g.skip("symptom heads have subgroup parity",
+                   "no symptom fairness rows in this run")
+        else:
+            bad = symptom_fairness[~symptom_fairness.passes]
+            g.add("symptom heads have subgroup parity", bad.empty,
+                  f"{len(bad)} of {len(symptom_fairness)} slices outside margin",
+                  "all slices within margin",
+                  "synthetic labels: this measures the generator's own asymmetries, which is "
+                  "why it reports rather than blocks")
 
         result = GateResult(g.rows)
         f = result.frame()

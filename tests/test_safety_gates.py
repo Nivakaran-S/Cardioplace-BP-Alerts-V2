@@ -75,7 +75,12 @@ def test_safety_gates():
               detector_alert_rate=0.048, pair_violation_rate=0.0,
               shipped_forecaster={"sbp": "ridge", "dbp": "hgb", "idwg": "ridge"},
               selected_forecaster={"sbp": "ridge", "dbp": "hgb", "idwg": "ridge"},
-              forecaster_features=["sbp_lag1", "sbp_z", "pp_mean7"])
+              forecaster_features=["sbp_lag1", "sbp_z", "pp_mean7"],
+              symptom_fairness=pd.DataFrame({"symptom": ["dizziness", "dizziness"],
+                                             "axis": ["sex", "sex"],
+                                             "level": ["male", "female"],
+                                             "pr_auc": [0.21, 0.19], "spread": [0.02, 0.02],
+                                             "passes": [True, True]}))
 
     good = run_safety_gates(**kw)
     print("\n--- healthy run ---")
@@ -110,6 +115,10 @@ def test_safety_gates():
             selected_forecaster={"sbp": "ridge", "dbp": "local_ar", "idwg": "ridge"}),
         "a target column reached the forecaster":
             dict(forecaster_features=["sbp_lag1", "y_sym_dizziness_h0"]),
+        "symptom subgroup disparity": dict(
+            symptom_fairness=pd.DataFrame({"symptom": ["dizziness"], "axis": ["sex"],
+                                           "level": ["male"], "pr_auc": [0.4],
+                                           "spread": [0.4], "passes": [False]})),
         "detector is reference": dict(shipped_detector="d_fixed_threshold"),
         "synthetic flag lost": dict(symptom_labels_synthetic=False),
         "cold-start penalty": dict(cold_start_penalty=9.0),
@@ -129,7 +138,8 @@ def test_safety_gates():
                             "shipped_detector": None, "cold_start_penalty": None,
                             "symptom_labels_synthetic": None,
                             "pair_violation_rate": None,
-                            "forecaster_features": None})
+                            "forecaster_features": None,
+                            "symptom_fairness": None})
     f = r.frame()
     skipped = f[f.detail.str.startswith("not evaluated")]
     assert len(skipped) >= 6, f.to_string()
