@@ -116,6 +116,39 @@ def check_bp_pair(sbp, dbp, *, pp_ref=None, bounds=None) -> dict:
     return out
 
 
+def attach_pair_coherence(forecast: dict, *, pp_ref=None, bounds=None) -> dict | None:
+    """Check every (sbp, dbp) horizon pair in an advisory's `forecast` and attach the verdict.
+
+    Mutates the nodes it is given -- that is the point, the caller wants the verdict on the
+    payload -- but only ever ADDS a `coherence` key. It never touches `point`, so a flagged
+    forecast is still reported exactly as the model produced it.
+
+    Returns the roll-up for `out["forecast_coherence"]`, or None when there is no pair to check
+    (dbp not forecast, or a cold-start/stale advisory with no forecast at all). None means "not
+    applicable", which is different from `{"ok": True}` and is why it is not a bare bool.
+    """
+    sbp_fc = (forecast or {}).get("sbp") or {}
+    dbp_fc = (forecast or {}).get("dbp") or {}
+    if not sbp_fc or not dbp_fc:
+        return None
+
+    flagged = 0
+    for key, snode in sbp_fc.items():
+        dnode = dbp_fc.get(key)
+        if not isinstance(snode, dict) or not isinstance(dnode, dict):
+            continue
+        v = check_bp_pair(snode.get("point"), dnode.get("point"),
+                          pp_ref=pp_ref, bounds=bounds)
+        snode["coherence"] = v
+        dnode["coherence"] = v
+        flagged += 0 if v["ok"] else 1
+    return {
+        "ok": flagged == 0, "n_flagged": flagged, "n_pairs": len(sbp_fc),
+        "reference": ("bundle" if bounds else
+                      "absolute checks only; this bundle predates the cohort reference"),
+    }
+
+
 def coherence_reference(panel, *, sbp_col: str = "sbp", dbp_col: str = "dbp") -> dict:
     """Cohort pulse-pressure reference for `bundle["coherence"]`.
 

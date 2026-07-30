@@ -37,6 +37,10 @@ from src.utils.ml_utils.model.architectures import (
     make_model,
     score_architecture,
 )
+from src.utils.ml_utils.model.coherence import (
+    attach_pair_coherence,
+    coherence_reference,
+)
 from src.utils.ml_utils.model.offset import OffsetModel
 
 __all__ = ["MODEL_KINDS", "MODEL_SPEC", "SEARCH_SPACE", "GRID_SPACE", "COST_RANK",
@@ -76,6 +80,22 @@ class BaselineForecaster(BaseEstimator):
 
 
 # ------------------------------------------------------------------------------ sweep
+
+def _first_finite(row, names):
+    """First finite value among `names` in a one-row frame, else None.
+
+    `transform_for_inference` returns every column it built, so a feature can be present and
+    NaN (a patient with too little history for a 7-session mean). Falling through to the next
+    candidate is what lets the pulse-pressure check run for a patient who has `pp_lag1` but not
+    yet `pp_mean7`, instead of silently skipping.
+    """
+    for n in names:
+        if n in row.columns:
+            v = row[n].iloc[0]
+            if v is not None and np.isfinite(v):
+                return float(v)
+    return None
+
 
 def run_sweep(F: pd.DataFrame, features: list, config, params: dict = None, seed: int = SEED):
     """Score every admitted architecture on three evaluation arms, per signal x horizon.
@@ -626,6 +646,11 @@ class BPPredictor:
             selected_but_unservable=unservable,
             interval=dict(models=qmodels, qhat=qhat, signal=interval_signal,
                           horizon=interval_horizon, fit_on="train", calibrated_on="val"),
+            # Pulse-pressure reference for the coherence check in predict(). Six floats off the
+            # same train+val rows the forecasters were fitted on, so the bound describes the
+            # cohort the model actually learned. A bundle without this key still gets the three
+            # absolute checks; the patient-baseline one records itself as skipped.
+            coherence=coherence_reference(F[fit_mask]),
             offset=dict(warm=offset_model.warm, k=offset_model.k, q=offset_model.q,
                         cohort_prior=offset_model.cohort_prior,
                         global_prior=offset_model.global_prior,
@@ -756,6 +781,22 @@ class BPPredictor:
                 out["forecast"].setdefault(sig, {})[f"h{h}"] = dict(
                     point=round(p, 1), readings_ahead=h + 1, steps_ahead=h + 1,
                     days_ahead_est=round((h + 1) * med_gap, 1))
+
+            # ---- is each predicted (sbp, dbp) pair a pressure a body could have? ----
+            # sbp and dbp are forecast by architectures selected independently, so nothing
+            # upstream has ever looked at the joint. Checked here, at the point they first
+            # become co-located, rather than in an enrichment block -- the SPA, the Space and
+            # every direct API caller read `forecast` whether or not enrichments ran.
+            #
+            # The verdict is ATTACHED. The point estimate is emitted exactly as the model
+            # produced it: clipping a forecast to look sensible would erase the disagreement
+            # that is the actual finding.
+            roll = attach_pair_coherence(
+                out["forecast"],
+                pp_ref=_first_finite(row, ("pp_mean7", "pp_lag1")),
+                bounds=b.get("coherence"))
+            if roll is not None:
+                out["forecast_coherence"] = roll
 
             iv = b["interval"]
             node = out["forecast"].get(iv["signal"], {}).get(f"h{iv['horizon']}")

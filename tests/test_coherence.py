@@ -19,6 +19,7 @@ import pandas as pd  # noqa: E402
 
 from src.constants.training_pipeline import INGEST_RANGES  # noqa: E402
 from src.utils.ml_utils.model.coherence import (  # noqa: E402
+    attach_pair_coherence,
     check_bp_pair,
     coherence_reference,
     pair_coherence,
@@ -146,6 +147,35 @@ def _batch():
     chk("    the reason breakdown is populated", bool(rep["top_reasons"]), rep)
 
 
+def _attach():
+    """The advisory-level wiring: verdicts land on the nodes, points are never touched."""
+    fc = {"sbp": {"h0": {"point": 142.0}, "h1": {"point": 145.0}},
+          "dbp": {"h0": {"point": 149.0},          # inverted
+                  "h1": {"point": 88.0}}}          # fine
+    roll = attach_pair_coherence(fc, pp_ref=55.0, bounds={"pp_abs_dev_p99": 20.0})
+    chk("roll-up counts the flagged pairs",
+        roll["n_flagged"] == 1 and roll["n_pairs"] == 2 and roll["ok"] is False, roll)
+    chk("    verdict is attached to BOTH legs of the pair",
+        "coherence" in fc["sbp"]["h0"] and "coherence" in fc["dbp"]["h0"])
+    chk("*** the point estimate is NOT modified ***",
+        fc["sbp"]["h0"]["point"] == 142.0 and fc["dbp"]["h0"]["point"] == 149.0, fc)
+    chk("    the coherent horizon is marked ok", fc["sbp"]["h1"]["coherence"]["ok"], fc)
+    chk("    and the incoherent one is not", not fc["sbp"]["h0"]["coherence"]["ok"], fc)
+    chk("    reference is reported as coming from the bundle",
+        roll["reference"] == "bundle", roll)
+
+    no_ref = attach_pair_coherence({"sbp": {"h0": {"point": 142.0}},
+                                    "dbp": {"h0": {"point": 88.0}}})
+    chk("a bundle with no coherence reference says so rather than implying one",
+        "predates" in no_ref["reference"], no_ref)
+
+    # No dbp forecast, or no forecast at all -> not applicable, which is not the same as ok.
+    chk("sbp-only forecast returns None (not applicable, not 'ok')",
+        attach_pair_coherence({"sbp": {"h0": {"point": 142.0}}}) is None)
+    chk("empty forecast returns None", attach_pair_coherence({}) is None)
+    chk("cold-start advisory returns None", attach_pair_coherence(None) is None)
+
+
 def run():
     for title, fn in (("ordering", _ordering),
                       ("input-contract floor", _floor),
@@ -153,7 +183,8 @@ def run():
                       ("patient baseline", _patient_baseline),
                       ("missing / non-finite", _missing),
                       ("cohort reference", _reference),
-                      ("batch report", _batch)):
+                      ("batch report", _batch),
+                      ("advisory attachment", _attach)):
         print(f"\n--- {title} ---")
         fn()
     print("\n" + ("ALL COHERENCE TESTS PASSED" if not FAILS
