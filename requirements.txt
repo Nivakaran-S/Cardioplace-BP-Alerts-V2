@@ -1,0 +1,36 @@
+# GENERATED FILE -- do not edit by hand.
+#
+# pyproject.toml is the single source of truth for dependencies. Regenerate with:
+#     uv export --no-hashes --no-dev --no-emit-project -o requirements.txt
+#
+# It exists because Hugging Face Spaces and plain `pip install -r` still want it. CI
+# checks that it agrees with pyproject.toml, because these two files had already drifted
+# once: requirements.txt pinned gradio and left mlflow unpinned while pyproject.toml did
+# the opposite.
+#
+# The hard pins on the numeric stack are deliberate: the serving bundle is a pickle of
+# fitted sklearn objects, and loading a 1.8.0 pickle on a 1.7.x runtime warns that it
+# "might lead to breaking code or invalid results".
+
+# --- pipeline ---
+numpy==2.4.2
+pandas==2.3.3
+scikit-learn==1.8.0
+scipy==1.16.0
+joblib==1.5.3
+pyarrow>=24.0.0
+pyyaml>=6.0.3
+python-dotenv>=1.2.2
+
+# --- tuning ---
+optuna>=4.0
+
+# --- experiment tracking ---
+mlflow>=3.14.0
+
+# --- serving ---
+fastapi>=0.141.1
+uvicorn[standard]>=0.52.0
+jinja2>=3.1.6
+pydantic>=2.11.10
+python-multipart>=0.0.32

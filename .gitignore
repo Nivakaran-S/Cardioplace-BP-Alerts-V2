@@ -1,0 +1,28 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+.ruff_cache/
+.pytest_cache/
+
+# Virtual environments and secrets
+.venv
+.env
+
+# Raw HEMOBP corpus (~262 MB) IS committed, through Git LFS -- see .gitattributes, which
+# routes data/*.csv through the LFS filter so the pointers land in git and the blobs land in
+# LFS storage. Without that filter vip.csv alone would put a 251 MB object into every clone's
+# history permanently. Anyone cloning needs `git lfs install` before the files resolve.
+
+# Pipeline outputs. All reproducible from `python main.py`.
+Artifacts/
+logs/
+final_model/
+cache/
+mlruns/
+*.joblib
+*.pkl
+*.pkl.tmp

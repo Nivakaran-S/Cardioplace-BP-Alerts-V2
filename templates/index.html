@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="en" data-theme="">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Cardioplace BP Alerts</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='13' font-size='13'>🫀</text></svg>">
+</head>
+<body>
+<header>
+  <h1>Cardioplace BP Alerts</h1>
+  <span class="sub">Provider-visible decision support</span>
+  <span class="spacer"></span>
+  <span id="model-chip" class="chip chip-muted">checking…</span>
+  <button id="btn-theme" class="btn ghost" aria-pressed="false" title="Toggle colour theme">◐</button>
+</header>
+
+<main>
+<div class="layout">
+
+  <!-- ------------------------------------------------------------ input -->
+  <form id="form" class="card" autocomplete="off" onsubmit="return false">
+    <h2>Patient</h2>
+    <p class="hint">Nothing here is stored. Every value is evaluated in the request.</p>
+
+    <div class="field">
+      <label for="patient-id">Patient identifier</label>
+      <input id="patient-id" value="demo-001" maxlength="64">
+    </div>
+
+    <div class="grid3">
+      <div class="field"><label for="age">Age</label>
+        <input id="age" type="number" min="18" max="110" value="68"></div>
+      <div class="field"><label for="sex">Sex</label>
+        <select id="sex"><option value="0">Female</option><option value="1" selected>Male</option></select></div>
+      <div class="field"><label for="dm">Diabetes</label>
+        <select id="dm"><option value="0" selected>No</option><option value="1">Yes</option></select></div>
+    </div>
+
+    <div class="grid3">
+      <div class="field"><label for="hf-type">Heart failure</label>
+        <select id="hf-type"><option value="NONE" selected>None</option>
+          <option value="HFREF">HFrEF</option><option value="HFPEF">HFpEF</option></select></div>
+      <div class="field"><label for="pregnant">Pregnant</label>
+        <select id="pregnant"><option value="0" selected>No</option><option value="1">Yes</option></select></div>
+      <div class="field"><label for="provider-target">Provider target</label>
+        <input id="provider-target" type="number" min="80" max="200" placeholder="optional"></div>
+    </div>
+
+    <div class="grid3">
+      <div class="field"><label for="missed-3d">Doses missed (3 d)</label>
+        <input id="missed-3d" type="number" min="0" max="3" value="0"></div>
+      <div class="field"><label for="adherence">Adherence (7 d)</label>
+        <input id="adherence" type="number" min="0" max="1" step="0.05" value="1"></div>
+      <div class="field"><label for="step-offset">Prior sessions</label>
+        <input id="step-offset" type="number" min="0" value="0"
+               title="Sessions before the ones pasted below. Without this a returning patient looks new."></div>
+    </div>
+
+    <fieldset><legend>Conditions <span id="cond-count" class="chip chip-muted">0</span></legend>
+      <div id="conditions" class="checks"></div></fieldset>
+    <fieldset><legend>Medications <span id="med-count" class="chip chip-muted">0</span></legend>
+      <div id="medications" class="checks"></div></fieldset>
+
+    <h2 style="margin-top:14px">Readings</h2>
+    <p class="hint">One session per line: <code>date, SBP, DBP</code> — pulse, weight and IDWG optional.</p>
+    <div class="field">
+      <textarea id="readings" spellcheck="false" aria-describedby="reading-count"></textarea>
+      <p id="reading-count" class="hint" aria-live="polite" style="margin-top:5px"></p>
+    </div>
+    <div class="row" style="margin-bottom:12px">
+      <button id="btn-sample" class="btn" type="button">Sample history</button>
+      <button id="btn-clear" class="btn ghost" type="button">Clear</button>
+    </div>
+
+    <h2>Today’s session</h2>
+    <p class="hint">Symptoms and position attach to the most recent reading only.</p>
+    <div class="grid2">
+      <div class="field"><label for="position">Position</label>
+        <select id="position"><option>SITTING</option><option>STANDING</option><option>LYING</option></select></div>
+      <div class="field"><label for="n-meas">Measurements</label>
+        <input id="n-meas" type="number" min="1" max="5" value="2"
+               title="The engine gates non-emergency rules behind two confirmed measurements."></div>
+    </div>
+    <fieldset><legend>Symptoms</legend><div id="symptoms" class="checks"></div></fieldset>
+
+    <p id="form-error" class="notice crit" hidden></p>
+    <button id="btn-predict" class="btn primary" type="button" style="width:100%">Get advisory</button>
+
+    <details style="margin-top:14px">
+      <summary class="hint" style="cursor:pointer">Retrain the model</summary>
+      <p class="hint" id="train-warning" style="margin-top:8px"></p>
+      <div class="row">
+        <button id="btn-train" class="btn" type="button">Start training</button>
+        <button id="btn-train-cancel" class="btn ghost" type="button">Cancel</button>
+        <span id="train-state" class="chip chip-muted">idle</span>
+      </div>
+      <p id="train-note" class="hint" style="margin-top:6px"></p>
+      <pre id="train-tail" class="tail" aria-live="polite" hidden></pre>
+    </details>
+  </form>
+
+  <!-- ------------------------------------------------------------ output -->
+  <section class="results" aria-busy="false">
+    <div id="empty-state" class="card">
+      <h2>No advisory yet</h2>
+      <p class="hint" style="margin-top:6px">
+        Enter a history and press <strong>Get advisory</strong>. The deterministic rule
+        engine runs even when no trained model is loaded.
+      </p>
+    </div>
+
+    <div id="output" hidden>
+      <div id="notices"></div>
+
+      <div id="banner" class="banner" role="status">
+        <div id="banner-icon" class="banner-icon">○</div>
+        <div>
+          <div id="banner-title" class="banner-title"></div>
+          <div id="banner-detail" class="banner-detail"></div>
+          <div id="banner-meta" class="banner-meta"></div>
+        </div>
+      </div>
+
+      <div class="tiles">
+        <div class="tile"><h3>Rule engine now</h3>
+          <div><span id="v-engine-tier" class="chip chip-muted">–</span></div>
+          <p id="v-engine-note" class="note"></p></div>
+        <div class="tile"><h3>Personalised threshold</h3>
+          <div class="value"><span id="v-threshold">–</span><span class="unit">mmHg</span></div>
+          <p id="v-threshold-note" class="note"></p></div>
+        <div class="tile"><h3>Early warning</h3>
+          <div><span id="v-ew-chip" class="chip chip-muted">–</span></div>
+          <div id="v-ew-meter" class="meter" role="meter" aria-valuemin="0" aria-valuemax="100"
+               aria-label="detector score against its cut" hidden>
+            <div id="v-ew-fill" class="meter-fill" style="width:2%"></div></div>
+          <p id="v-ew-note" class="note"></p></div>
+        <div class="tile"><h3>Confidence</h3>
+          <div class="value" id="v-tier" style="font-size:19px">–</div>
+          <p id="v-tier-note" class="note"></p></div>
+      </div>
+
+      <div class="card" id="forecast-card">
+        <h2>Model 1 — blood-pressure forecast</h2>
+        <p class="hint">Observed history, the projected horizons and the 80% conformal band.</p>
+        <div id="chart" class="chart"></div>
+        <div id="chart-legend" class="legend"></div>
+        <div class="panel-scroll"><table id="forecast-table">
+          <thead><tr><th>Horizon</th><th class="num">SBP</th><th class="num">80% band</th>
+            <th class="num">Days</th><th>vs threshold</th></tr></thead><tbody></tbody>
+        </table></div>
+        <p id="interval-basis" class="caption"></p>
+      </div>
+
+      <div class="card" id="predicted-card">
+        <h2>Predicted alerts</h2>
+        <p class="hint">Each forecast pushed back through the rule engine.</p>
+        <div id="predicted-alerts" class="horizons"></div>
+        <p id="predicted-note" class="caption"></p>
+      </div>
+
+      <div class="card" id="engine-card">
+        <h2>Rule engine</h2>
+        <p class="hint">Deterministic. 56 rules across 8 tiers; the ML layer never overrides it.</p>
+        <div id="engine-timeline" class="timeline"></div>
+        <p id="engine-count" class="caption"></p>
+        <div class="panel-scroll"><table id="engine-table">
+          <thead><tr><th>Session</th><th>Tier</th><th>Rule</th></tr></thead><tbody></tbody>
+        </table></div>
+        <p id="engine-note" class="caption"></p>
+      </div>
+
+      <div class="card" id="anomaly-panel" hidden>
+        <h2>Model 3 — early-warning detector</h2>
+        <p id="anomaly-sub" class="hint"></p>
+        <div id="anomaly-chart" class="chart"></div>
+        <div id="anomaly-legend" class="legend"></div>
+        <p id="anomaly-note" class="caption"></p>
+      </div>
+
+      <div class="card" id="backtest-panel" hidden>
+        <h2>Backtest — what was predicted against what happened</h2>
+        <div id="backtest-chart" class="chart"></div>
+        <div id="backtest-legend" class="legend"></div>
+        <div class="panel-scroll"><table id="backtest-table">
+          <thead><tr><th>Horizon</th><th class="num">Days ahead</th><th class="num">n</th>
+            <th class="num">MAE (mmHg)</th><th class="num">Within 10</th></tr></thead><tbody></tbody>
+        </table></div>
+        <p id="backtest-note" class="caption"></p>
+      </div>
+
+      <div class="card" id="symptom-panel" hidden>
+        <h2>Model 4 — symptom risk</h2>
+        <p id="symptom-warning" class="notice warn"></p>
+        <div class="panel-scroll"><table id="symptom-table">
+          <thead><tr><th>Symptom</th><th>Mechanism</th><th class="num">Probability</th>
+            <th class="num">Cut</th><th>Status</th></tr></thead><tbody></tbody>
+        </table></div>
+        <p id="symptom-note" class="caption"></p>
+      </div>
+
+      <div class="card">
+        <h2>Governance</h2>
+        <div id="gov-list" class="gov"></div>
+        <p class="disclaimer">
+          Provider-visible decision support, not a medical device and not a diagnosis.
+          The ML layer never writes a DeviationAlert and never moves an emergency threshold:
+          the 180 / 120 mmHg floor is fixed and is never personalised.
+        </p>
+      </div>
+    </div>
+  </section>
+</div>
+</main>
+
+<script src="/static/charts.js" defer></script>
+<script src="/static/app.js" defer></script>
+</body>
+</html>

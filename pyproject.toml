@@ -1,0 +1,80 @@
+[project]
+name = "cardioplace-bp-alerts-v2"
+version = "2.0.0"
+description = "Blood-pressure forecasting, personalised alert thresholds and early-warning detection for haemodialysis patients, behind a deterministic clinical rule engine."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    # --- pipeline -----------------------------------------------------------------
+    # Hard-pinned on purpose. The serving bundle is a pickle of fitted sklearn objects,
+    # and a 1.7.x runtime against a 1.8.0 pickle raises InconsistentVersionWarning --
+    # "might lead to breaking code or invalid results". Silent numeric drift is not an
+    # acceptable failure mode for a clinical model, so the runtime that loads the bundle
+    # must be the runtime that produced it. Re-pin whenever the bundle is retrained.
+    "numpy==2.4.2",
+    "pandas==2.3.3",
+    "scikit-learn==1.8.0",
+    "scipy==1.16.0",
+    "joblib==1.5.3",
+    "pyarrow>=24.0.0",
+    "pyyaml>=6.0.3",
+    "python-dotenv>=1.2.2",
+    # --- tuning -------------------------------------------------------------------
+    # The tuner falls back to a random search without it and says so at WARNING. The
+    # notebook this is ported from hid that fallback inside a bare try/except, so a
+    # machine without optuna silently ran a 12-draw random search and called it TPE.
+    "optuna>=4.0",
+    # --- experiment tracking --------------------------------------------------------
+    "mlflow>=3.14.0",
+    # --- serving --------------------------------------------------------------------
+    "fastapi>=0.141.1",
+    "uvicorn[standard]>=0.52.0",
+    "jinja2>=3.1.6",
+    "pydantic>=2.11.10",
+    "python-multipart>=0.0.32",
+]
+
+# `gradio` was removed: the UI is a hand-written vanilla-JS SPA served by FastAPI, so the
+# Space runs the Docker SDK (see the Dockerfile) rather than the Gradio SDK.
+# `dagshub` was removed: it was imported and never called, and MLflow already reads
+# MLFLOW_TRACKING_URI from .env, which is the mechanism actually in use.
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "httpx>=0.27",        # required by fastapi.testclient
+    "ruff>=0.6",
+]
+
+# uv would otherwise try to build and install this repo as a distributable package. It is
+# an application, not a library: there is nothing to install and no build backend.
+[tool.uv]
+package = false
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+exclude = [".venv", "Artifacts", "notebooks", "data"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]
+ignore = [
+    "E501",   # line length is enforced by the formatter, not the linter
+    "B008",   # FastAPI's Depends()/Field() defaults are the documented idiom
+    # `raise CustomException(e, sys)` is the pipeline-wide error idiom, and CustomException
+    # already walks the traceback to the deepest frame -- chaining with `from` would add a
+    # second copy of the same context to every message.
+    "B904",
+    # zip(strict=) would be right on paired arrays, but most zips here walk a frame against
+    # a derived array of known equal length, and the noise outweighs the catch.
+    "B905",
+    "B007",   # loop variables kept for readability in itertuples/enumerate walks
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+filterwarnings = [
+    "ignore::UserWarning",
+    "ignore::FutureWarning",
+]

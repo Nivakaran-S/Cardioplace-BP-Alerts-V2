@@ -1,0 +1,199 @@
+/* Design tokens. Light by default, dark via prefers-color-scheme, both overridable by the
+   [data-theme] attribute the toggle stamps on <html> -- so an explicit choice always wins
+   over the OS preference in both directions. */
+:root {
+  --surface-0:#f6f7f9; --surface-1:#ffffff; --surface-2:#eef1f5; --plane:#ffffff;
+  --text-primary:#12161c; --text-secondary:#48505c; --text-muted:#79828f;
+  --border:#dde2e9; --grid:#eaeef3; --axis:#b6bfcb;
+  --series-1:#2563eb; --series-2:#7c3aed;
+  --status-good:#0f8a5f; --status-info:#2563eb; --status-warning:#b26a00;
+  --status-serious:#c2410c; --status-critical:#c02626;
+  --tier-emergency:#c02626; --tier-contra:#a21caf; --tier-l1:#b26a00;
+  --tier-l1-low:#0369a1; --tier-info:#64748b;
+  --radius:10px; --shadow:0 1px 2px rgba(16,24,40,.06), 0 1px 3px rgba(16,24,40,.04);
+  --font:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --surface-0:#0e1116; --surface-1:#161b22; --surface-2:#1d232c; --plane:#11151b;
+    --text-primary:#e8edf4; --text-secondary:#a7b1bf; --text-muted:#717d8c;
+    --border:#2a323d; --grid:#222932; --axis:#404b59;
+    --series-1:#5b9bff; --series-2:#a78bfa;
+    --status-good:#3fbf8f; --status-info:#5b9bff; --status-warning:#e0a33a;
+    --status-serious:#f97316; --status-critical:#f4696b;
+    --tier-emergency:#f4696b; --tier-contra:#e879f9; --tier-l1:#e0a33a;
+    --tier-l1-low:#38bdf8; --tier-info:#94a3b8;
+    --shadow:0 1px 2px rgba(0,0,0,.4);
+  }
+}
+:root[data-theme="light"] {
+  --surface-0:#f6f7f9; --surface-1:#ffffff; --surface-2:#eef1f5; --plane:#ffffff;
+  --text-primary:#12161c; --text-secondary:#48505c; --text-muted:#79828f;
+  --border:#dde2e9; --grid:#eaeef3; --axis:#b6bfcb;
+  --series-1:#2563eb; --series-2:#7c3aed;
+  --status-good:#0f8a5f; --status-info:#2563eb; --status-warning:#b26a00;
+  --status-serious:#c2410c; --status-critical:#c02626;
+  --tier-emergency:#c02626; --tier-contra:#a21caf; --tier-l1:#b26a00;
+  --tier-l1-low:#0369a1; --tier-info:#64748b;
+}
+:root[data-theme="dark"] {
+  --surface-0:#0e1116; --surface-1:#161b22; --surface-2:#1d232c; --plane:#11151b;
+  --text-primary:#e8edf4; --text-secondary:#a7b1bf; --text-muted:#717d8c;
+  --border:#2a323d; --grid:#222932; --axis:#404b59;
+  --series-1:#5b9bff; --series-2:#a78bfa;
+  --status-good:#3fbf8f; --status-info:#5b9bff; --status-warning:#e0a33a;
+  --status-serious:#f97316; --status-critical:#f4696b;
+  --tier-emergency:#f4696b; --tier-contra:#e879f9; --tier-l1:#e0a33a;
+  --tier-l1-low:#38bdf8; --tier-info:#94a3b8;
+}
+
+*{box-sizing:border-box}
+body{margin:0;background:var(--surface-0);color:var(--text-primary);font:15px/1.55 var(--font);
+     -webkit-font-smoothing:antialiased}
+h1,h2,h3{margin:0;font-weight:620;letter-spacing:-.011em}
+h1{font-size:19px} h2{font-size:15px} h3{font-size:13px}
+p{margin:0}
+a{color:var(--series-1)}
+button{font:inherit}
+:focus-visible{outline:2px solid var(--series-1);outline-offset:2px;border-radius:4px}
+.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;
+         clip:rect(0 0 0 0);white-space:nowrap;border:0}
+
+/* ---------------------------------------------------------------- structure */
+header{position:sticky;top:0;z-index:20;display:flex;align-items:center;gap:12px;
+       padding:12px 20px;background:var(--surface-1);border-bottom:1px solid var(--border)}
+header .sub{color:var(--text-muted);font-size:12.5px}
+header .spacer{flex:1}
+main{max-width:1500px;margin:0 auto;padding:18px 20px 64px}
+.layout{display:grid;grid-template-columns:370px 1fr;gap:18px;align-items:start}
+@media (max-width:1080px){.layout{grid-template-columns:1fr}}
+.card{background:var(--surface-1);border:1px solid var(--border);border-radius:var(--radius);
+      box-shadow:var(--shadow);padding:16px;margin-bottom:16px}
+.card > h2{margin-bottom:4px}
+.card .hint{color:var(--text-muted);font-size:12.5px;margin-bottom:10px}
+.panel-scroll{overflow-x:auto}
+
+/* ---------------------------------------------------------------- form */
+.field{margin-bottom:11px}
+.field label{display:block;font-size:12.5px;color:var(--text-secondary);margin-bottom:4px}
+input,select,textarea{width:100%;padding:7px 9px;background:var(--plane);
+  color:var(--text-primary);border:1px solid var(--border);border-radius:7px;font:inherit}
+textarea{font:12.5px/1.5 var(--mono);resize:vertical;min-height:150px}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px}
+fieldset{border:1px solid var(--border);border-radius:8px;padding:8px 10px 10px;margin:0 0 10px}
+legend{font-size:11.5px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;
+       padding:0 5px}
+.checks{display:flex;flex-wrap:wrap;gap:5px}
+.chk{display:inline-flex;align-items:center;gap:5px;padding:4px 9px;background:var(--surface-2);
+     border:1px solid var(--border);border-radius:999px;font-size:12.5px;cursor:pointer;
+     user-select:none}
+.chk input{width:auto;margin:0}
+.chk:hover{border-color:var(--axis)}
+.chk.red{border-color:color-mix(in srgb,var(--status-critical) 45%,var(--border))}
+.chk.red .dot{width:6px;height:6px;border-radius:50%;background:var(--status-critical)}
+.chk:has(input:checked){background:color-mix(in srgb,var(--series-1) 14%,var(--surface-2));
+  border-color:var(--series-1)}
+.btn{padding:9px 14px;border-radius:8px;border:1px solid var(--border);
+     background:var(--surface-2);color:var(--text-primary);cursor:pointer}
+.btn:hover{border-color:var(--axis)}
+.btn.primary{background:var(--series-1);border-color:var(--series-1);color:#fff;font-weight:560}
+.btn.primary:disabled{opacity:.55;cursor:progress}
+.btn.ghost{background:transparent}
+.row{display:flex;gap:8px;align-items:center}
+
+/* ---------------------------------------------------------------- chips */
+.chip{display:inline-flex;align-items:center;gap:5px;padding:2px 9px;border-radius:999px;
+      font-size:12px;font-weight:560;border:1px solid transparent;white-space:nowrap}
+.chip-good{background:color-mix(in srgb,var(--status-good) 15%,transparent);color:var(--status-good)}
+.chip-info{background:color-mix(in srgb,var(--status-info) 15%,transparent);color:var(--status-info)}
+.chip-warning{background:color-mix(in srgb,var(--status-warning) 17%,transparent);color:var(--status-warning)}
+.chip-critical{background:color-mix(in srgb,var(--status-critical) 15%,transparent);color:var(--status-critical)}
+.chip-muted{background:var(--surface-2);color:var(--text-muted)}
+
+/* ---------------------------------------------------------------- banner */
+.banner{display:flex;gap:12px;align-items:flex-start;padding:14px 16px;border-radius:var(--radius);
+        border:1px solid var(--border);background:var(--surface-1);margin-bottom:16px}
+.banner-icon{font-size:20px;line-height:1.2}
+.banner-title{font-weight:640}
+.banner-detail{color:var(--text-secondary);font-size:13.5px;margin-top:2px}
+.banner-meta{color:var(--text-muted);font-size:12px;margin-top:5px;font-family:var(--mono)}
+.banner-good{border-left:4px solid var(--status-good)}
+.banner-watch{border-left:4px solid var(--status-warning)}
+.banner-critical{border-left:4px solid var(--status-critical);
+  background:color-mix(in srgb,var(--status-critical) 7%,var(--surface-1))}
+.notice{padding:10px 13px;border-radius:8px;font-size:13px;margin-bottom:12px;
+        border:1px solid var(--border);background:var(--surface-2);color:var(--text-secondary)}
+.notice.warn{border-color:color-mix(in srgb,var(--status-warning) 45%,var(--border));
+  background:color-mix(in srgb,var(--status-warning) 9%,var(--surface-1))}
+.notice.crit{border-color:color-mix(in srgb,var(--status-critical) 45%,var(--border));
+  background:color-mix(in srgb,var(--status-critical) 8%,var(--surface-1))}
+
+/* ---------------------------------------------------------------- tiles */
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px;
+       margin-bottom:16px}
+.tile{background:var(--surface-1);border:1px solid var(--border);border-radius:var(--radius);
+      padding:13px;box-shadow:var(--shadow)}
+.tile h3{color:var(--text-muted);font-size:11.5px;text-transform:uppercase;letter-spacing:.05em;
+         font-weight:600;margin-bottom:7px}
+.tile .value{font-size:25px;font-weight:640;letter-spacing:-.02em}
+.tile .value .unit{font-size:13px;color:var(--text-muted);font-weight:450;margin-left:3px}
+.tile .note{color:var(--text-muted);font-size:12px;margin-top:5px}
+.meter{height:7px;background:var(--surface-2);border-radius:4px;overflow:hidden;margin:9px 0 5px}
+.meter-fill{height:100%;background:var(--status-info);border-radius:4px;transition:width .25s}
+.meter-fill.over{background:var(--status-critical)}
+
+/* ---------------------------------------------------------------- tables */
+table{width:100%;border-collapse:collapse;font-size:13px}
+th,td{text-align:left;padding:6px 9px;border-bottom:1px solid var(--grid)}
+th{color:var(--text-muted);font-size:11.5px;text-transform:uppercase;letter-spacing:.04em;
+   font-weight:600}
+td.num,th.num{text-align:right;font-family:var(--mono);font-variant-numeric:tabular-nums}
+tbody tr:last-child td{border-bottom:none}
+
+/* ---------------------------------------------------------------- charts */
+.chart{width:100%;overflow-x:auto}
+.chart svg{display:block;width:100%;height:auto;min-width:520px}
+.legend{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--text-secondary);
+        margin-top:8px}
+.legend .k{display:inline-flex;align-items:center;gap:6px}
+.legend .sw{width:15px;height:2.5px;border-radius:2px;background:var(--series-1)}
+.legend .sw.dash{background:repeating-linear-gradient(90deg,var(--series-2) 0 5px,transparent 5px 9px)}
+.caption{color:var(--text-muted);font-size:12px;margin-top:8px}
+
+/* ---------------------------------------------------------------- horizons */
+.horizons{display:grid;grid-template-columns:repeat(auto-fit,minmax(165px,1fr));gap:11px}
+.horizon{background:var(--surface-2);border:1px solid var(--border);border-radius:9px;padding:11px}
+.horizon-when{color:var(--text-muted);font-size:11.5px}
+.horizon-bp{font-size:21px;font-weight:620;margin:3px 0 1px}
+.horizon-bp .unit{font-size:12px;color:var(--text-muted);font-weight:450;margin-left:3px}
+.horizon-band{color:var(--text-muted);font-size:11.5px;margin-bottom:7px;font-family:var(--mono)}
+.horizon-rule{color:var(--text-secondary);font-size:11.5px;margin-top:6px}
+
+/* ---------------------------------------------------------------- timeline */
+.timeline{display:flex;flex-wrap:wrap;gap:3px;margin:10px 0}
+.tl{width:11px;height:20px;border-radius:2px;background:var(--surface-2);
+    border:1px solid var(--border)}
+.tl-BP_LEVEL_2,.tl-BP_LEVEL_2_SYMPTOM_OVERRIDE{background:var(--tier-emergency);border-color:transparent}
+.tl-TIER_1_ANGIOEDEMA{background:var(--tier-emergency);border-color:transparent}
+.tl-TIER_1_CONTRAINDICATION{background:var(--tier-contra);border-color:transparent}
+.tl-TIER_2_DISCREPANCY{background:var(--status-serious);border-color:transparent}
+.tl-BP_LEVEL_1_HIGH{background:var(--tier-l1);border-color:transparent}
+.tl-BP_LEVEL_1_LOW{background:var(--tier-l1-low);border-color:transparent}
+.tl-TIER_3_INFO{background:var(--tier-info);border-color:transparent}
+
+/* ---------------------------------------------------------------- governance */
+.gov{display:grid;grid-template-columns:repeat(auto-fit,minmax(185px,1fr));gap:9px;
+     font-size:12.5px}
+.gov div{background:var(--surface-2);border-radius:7px;padding:8px 10px}
+.gov .k{color:var(--text-muted);font-size:11px;text-transform:uppercase;letter-spacing:.04em}
+.gov .v{font-family:var(--mono);font-size:13px;margin-top:2px}
+.disclaimer{margin-top:12px;padding:11px 13px;border-radius:8px;font-size:12.5px;
+  border:1px solid var(--border);background:var(--surface-2);color:var(--text-secondary)}
+
+/* ---------------------------------------------------------------- train */
+pre.tail{background:var(--plane);border:1px solid var(--border);border-radius:8px;padding:10px;
+  max-height:280px;overflow:auto;font:11.5px/1.5 var(--mono);color:var(--text-secondary);
+  white-space:pre-wrap}
+[hidden]{display:none !important}
