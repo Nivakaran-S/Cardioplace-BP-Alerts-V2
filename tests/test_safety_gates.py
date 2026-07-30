@@ -73,7 +73,7 @@ def test_safety_gates():
               offset_learned_max=151.0, shipped_forecaster="ridge",
               selected_forecaster="ridge", shipped_detector="d_isoforest",
               cold_start_penalty=1.4, symptom_labels_synthetic=True,
-              detector_alert_rate=0.048)
+              detector_alert_rate=0.048, pair_violation_rate=0.0)
 
     good = run_safety_gates(**kw)
     print("\n--- healthy run ---")
@@ -106,6 +106,9 @@ def test_safety_gates():
         "detector is reference": dict(shipped_detector="d_fixed_threshold"),
         "synthetic flag lost": dict(symptom_labels_synthetic=False),
         "cold-start penalty": dict(cold_start_penalty=9.0),
+        # Gate 17. Non-critical on purpose: a JOINT property must not veto a forecaster whose
+        # own marginal MAE cleared every other bar in the table.
+        "incoherent forecast pairs": dict(pair_violation_rate=0.03),
         "missingness blowup": dict(missingness=missing.assign(MAE=[8.0, 12.0, 18.0, 25.0])),
     }.items():
         r = run_safety_gates(**{**kw, **override})
@@ -117,7 +120,8 @@ def test_safety_gates():
     r = run_safety_gates(**{**kw, "fairness": pd.DataFrame(), "cold": pd.DataFrame(),
                             "missingness": None, "offset_learned_max": None,
                             "shipped_detector": None, "cold_start_penalty": None,
-                            "symptom_labels_synthetic": None})
+                            "symptom_labels_synthetic": None,
+                            "pair_violation_rate": None})
     f = r.frame()
     skipped = f[f.detail.str.startswith("not evaluated")]
     assert len(skipped) >= 6, f.to_string()

@@ -320,6 +320,14 @@ inputs; these are the tolerances on the evidence that the governance held.
 # judged to be answering questions it was never fitted for.
 OOD_RATE_MAX: float = 0.20
 
+# Share of forecast rows whose (sbp, dbp) pair may be physiologically incoherent -- diastolic
+# at or above systolic, or a pulse pressure below the floor `schemas.Reading` enforces on
+# submitted readings. Zero, because the two legs come from independently selected
+# architectures and there is no benign reason for them to contradict each other: any non-zero
+# rate is a real defect, not a tolerance to be spent. Reported by gate 17, which is
+# non-critical until a full run establishes that zero is actually attainable on this cohort.
+PAIR_VIOLATION_MAX: float = 0.0
+
 # Reading counts the cold-start curve probes. 7 and 48 are the tier boundaries
 # (COLD_START_MIN_READINGS / STEADY_STATE_READINGS); the rest bracket them.
 COLD_START_PROBE_N: tuple = (3, 7, 10, 25, 48, 60)

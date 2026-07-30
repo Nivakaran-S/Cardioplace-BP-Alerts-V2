@@ -262,6 +262,7 @@ class ModelTrainerConfig:
 
         # Safety-gate tolerances. Read only by src/utils/ml_utils/safety/.
         self.ood_rate_max: float = training_pipeline.OOD_RATE_MAX
+        self.pair_violation_max: float = training_pipeline.PAIR_VIOLATION_MAX
         self.cold_start_probe_n: tuple = training_pipeline.COLD_START_PROBE_N
         self.cold_start_penalty_max_mmHg: float = (
             training_pipeline.COLD_START_PENALTY_MAX_MMHG

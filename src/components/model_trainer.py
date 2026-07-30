@@ -54,6 +54,7 @@ from src.utils.ml_utils.model.classifier_head import (
     train_symptom_heads,
     train_tier_head,
 )
+from src.utils.ml_utils.model.coherence import pair_coherence
 from src.utils.ml_utils.model.detector import (
     BASE_DETECTORS,
     DETECTOR_FAMILY,
@@ -690,6 +691,42 @@ class ModelTrainer:
                          os.path.getsize(config.bundle_file_path) / 1e6,
                          predictor.b["model_version"])
 
+            # ---- 9b. is the SHIPPED (sbp, dbp) pair coherent? ---------------------
+            # Nothing upstream has ever inspected the joint: select_and_decide ranks per
+            # signal, so sbp and dbp can ship different architectures that are each excellent
+            # on their own marginal MAE and jointly emit a diastolic above the systolic. This
+            # is the first measurement of whether that actually happens, and it is scored on
+            # the frozen forecasters -- the ones that will serve -- rather than on sweep
+            # predictions, for the same reason run_fairness audits what ships.
+            pair_rows = []
+            try:
+                te_pair = F[(F.split == "test") & (F.patient_split == "fit")] \
+                    if "patient_split" in F else F[F.split == "test"]
+                if len(te_pair) > config.max_eval_rows:
+                    te_pair = te_pair.sample(config.max_eval_rows, random_state=config.seed)
+                Xp = te_pair[features]
+                pp_ref = (te_pair["pp_mean7"].to_numpy(dtype=float)
+                          if "pp_mean7" in te_pair else None)
+                for h in config.horizons:
+                    ms = predictor.b["forecasters"].get(("sbp", h))
+                    md = predictor.b["forecasters"].get(("dbp", h))
+                    if ms is None or md is None:
+                        continue
+                    pair_rows.append(pair_coherence(
+                        np.asarray(ms.predict(Xp), dtype=float),
+                        np.asarray(md.predict(Xp), dtype=float),
+                        pp_ref=pp_ref, bounds=predictor.b.get("coherence"), horizon=h))
+            except Exception as exc:                                  # noqa: BLE001
+                logging.warning("pair coherence report unavailable: %s", exc)
+            pair_df = pd.DataFrame(pair_rows)
+            if len(pair_df):
+                save_report(config.report_path("pair_coherence.csv"), pair_df)
+                worst = float(pair_df.violation_rate.max())
+                logging.info("forecast pair coherence: worst violation rate %.4f across %d "
+                             "horizons (%s)", worst, len(pair_df),
+                             "clean" if worst == 0 else
+                             "; ".join(r for r in pair_df.top_reasons if r))
+
             # ---- 10. fairness ----------------------------------------------------
             fairness = self.run_fairness(F, features, config, winner, M_hold,
                                          D_test, det_report, shipped)
@@ -801,7 +838,10 @@ class ModelTrainer:
                                      offset_learned_max=offset_promo.get(
                                          "max_prediction"),
                                      symptom_labels_synthetic=predictor.b.get(
-                                         "symptom_labels_synthetic"))
+                                         "symptom_labels_synthetic"),
+                                     pair_violation_rate=(
+                                         float(pair_df.violation_rate.max())
+                                         if len(pair_df) else None))
             save_report(config.report_path("safety_gates.csv"), gates.frame())
             gate_artifact = SafetyGateArtifact(
                 gate_report_file_path=config.report_path("safety_gates.csv"),

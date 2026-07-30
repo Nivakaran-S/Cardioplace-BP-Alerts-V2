@@ -235,7 +235,7 @@ def run_safety_gates(alerts_pop, alerts_pers, OFF, advisories, cold, fairness,
                      offset_learned_max=None, shipped_forecaster=None,
                      selected_forecaster=None, shipped_detector=None,
                      cold_start_penalty=None, symptom_labels_synthetic=None,
-                     detector_alert_rate=None) -> GateResult:
+                     detector_alert_rate=None, pair_violation_rate=None) -> GateResult:
     """Evaluate every promotion gate and return the report plus the promotable flag.
 
     The trailing keyword arguments are the gates whose evidence is produced by later phases
@@ -476,6 +476,28 @@ def run_safety_gates(alerts_pop, alerts_pers, OFF, advisories, cold, fairness,
             g.add("shipped detector is not the rule-engine reference", ok,
                   str(shipped_detector), "!= d_fixed_threshold",
                   "d_fixed_threshold is the rule engine wearing a detector interface")
+
+        # ---- 17. the predicted (sbp, dbp) pair is physiologically coherent ------
+        # sbp and dbp are forecast by architectures chosen independently, so nothing else in
+        # this report looks at the joint. A pair the API would have REFUSED as an input
+        # reading -- pulse pressure below the schema floor, or diastolic above systolic --
+        # is incoherent by the project's own definition, and pulse pressure is a rule axis,
+        # so an incoherent pair can raise a watch banner that is purely an artefact.
+        #
+        # Non-critical, deliberately. Making it blocking would let a JOINT property veto a
+        # forecaster whose own marginal MAE cleared every bar in this table, which is
+        # precisely the kind of coupling the rest of these gates avoid. Promote it only
+        # after a full run shows the observed rate is a stable zero.
+        if pair_violation_rate is None:
+            g.skip("forecast pairs are physiologically coherent",
+                   "no paired sbp/dbp forecast reported by this run")
+        else:
+            rate = float(pair_violation_rate)
+            g.add("forecast pairs are physiologically coherent",
+                  rate <= config.pair_violation_max, round(rate, 6),
+                  f"<= {config.pair_violation_max}",
+                  "sbp and dbp ship independently selected architectures; this is the only "
+                  "check on what they say together")
 
         result = GateResult(g.rows)
         f = result.frame()
