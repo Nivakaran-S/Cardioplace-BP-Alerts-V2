@@ -187,26 +187,45 @@ def chained_symptom_risk(predictor, history, advisory, as_of=None, *,
         return {"available": False, "reason": "this bundle has no next-session heads",
                 "items": []}
 
-    horizons = sorted(int(k[1:]) for k in (fc.get("sbp") or {}) if k.startswith("h"))
+    # Which session does a chained row actually score? Appending the forecasts for sessions
+    # T+1..T+j+1 puts `transform_for_inference`'s placeholder at T+j+2, so the head scores the
+    # symptom at **session j+2**, conditioned on the forecast trajectory through session j+1.
+    # Measured directly rather than reasoned about: with no forecast appended the placeholder
+    # is T+1, and each appended reading advances it by one.
+    #
+    # Two consequences that have to be stated rather than buried:
+    #
+    #   * **Session 1 cannot be chained.** Scoring T+1 requires the placeholder at T+1, which
+    #     means appending nothing -- that is exactly the direct `symptom_block` path. The chain
+    #     begins at session 2.
+    #   * **The head never sees the BP of the session it is scoring.** The causal contract puts
+    #     features at t strictly at <= t-1, and the head was trained that way. The generator,
+    #     though, drives sym[t] from sbp[t]. So the chain supplies the forecast trajectory up
+    #     to the PRECEDING session; it cannot supply the contemporaneous value the label
+    #     actually depends on. It helps through autocorrelation, and that is a smaller claim
+    #     than "conditioned on the predicted blood pressure" would suggest.
+    nodes = sorted(int(k[1:]) for k in (fc.get("sbp") or {}) if k.startswith("h"))
     items, bases = [], {}
-    for h in horizons:
-        node = (fc.get("sbp") or {}).get(f"h{h}") or {}
+    for j in nodes:
+        # The last forecast appended is node h{j} -- the BP at session j+1 -- and it is the one
+        # that lands in sbp_lag1, so it is the one whose uncertainty matters here.
+        node = (fc.get("sbp") or {}).get(f"h{j}") or {}
+        sessions_ahead = j + 2
         sigma = _sigma_from_node(node) if marginalise else None
 
+        point = _score_heads(predictor, chained_history(history, fc, j), h0_keys, as_of)
         if sigma:
             acc, wsum = {}, 0.0
             for z, w in _GH_NODES:
                 probs = _score_heads(predictor,
-                                     chained_history(history, fc, h, sbp_shift=z * sigma),
+                                     chained_history(history, fc, j, sbp_shift=z * sigma),
                                      h0_keys, as_of)
                 for k, p in probs.items():
                     acc[k] = acc.get(k, 0.0) + w * p
                 wsum += w
             marg = {k: v / wsum for k, v in acc.items()}
-            point = _score_heads(predictor, chained_history(history, fc, h), h0_keys, as_of)
             basis = f"marginalised over an 80% conformal band (sigma {sigma:.1f} mmHg)"
         else:
-            point = _score_heads(predictor, chained_history(history, fc, h), h0_keys, as_of)
             marg = point
             basis = ("point forecast only -- no interval is fitted at this horizon, so the "
                      "Jensen correction could not be applied and this probability is "
@@ -215,9 +234,11 @@ def chained_symptom_risk(predictor, history, advisory, as_of=None, *,
         for k, p in marg.items():
             base = k.rsplit("_h", 1)[0]
             items.append({
-                "key": base, "horizon": h + 1,
+                "key": base,
+                "sessions_ahead": sessions_ahead,
                 "days_ahead": node.get("days_ahead_est"),
-                "predicted_sbp": node.get("point"),
+                "conditioned_through_sbp": node.get("point"),
+                "conditioned_through_session": j + 1,
                 "prob": round(float(p), 4),
                 "prob_point": round(float(point.get(k, p)), 4),
                 "jensen_gap": round(float(p) - float(point.get(k, p)), 4),
@@ -228,15 +249,25 @@ def chained_symptom_risk(predictor, history, advisory, as_of=None, *,
                 "red_flag": base in reds,
                 "uncertainty_basis": basis,
             })
-            bases[h] = basis
+            bases[sessions_ahead] = basis
 
     # Red flags first, then by probability. Never averaged into a mechanism score: a red flag
     # next to fatigue is not half a red flag.
-    items.sort(key=lambda d: (d["horizon"], not d["red_flag"], -d["prob"]))
+    items.sort(key=lambda d: (d["sessions_ahead"], not d["red_flag"], -d["prob"]))
     gaps = [abs(i["jensen_gap"]) for i in items]
     return {
         "available": True, "items": items, "n_heads": len(h0_keys),
-        "horizons": [h + 1 for h in horizons],
+        "sessions_ahead": [j + 2 for j in nodes],
+        "session_1_note": ("Session 1 is not chainable: scoring it needs the placeholder at "
+                           "T+1, which means appending no forecast at all -- that is the "
+                           "direct symptom_risk block. The chain starts at session 2."),
+        "conditioning_note": ("The head never sees the blood pressure of the session it "
+                              "scores: features at t read only <= t-1 and it was trained that "
+                              "way, while the label generator drives the symptom from the "
+                              "CONTEMPORANEOUS pressure. The chain supplies the forecast "
+                              "trajectory through the preceding session, so it helps through "
+                              "autocorrelation rather than by conditioning on the value the "
+                              "label actually depends on."),
         "marginalised": bool(marginalise and any("marginalised" in b for b in bases.values())),
         "max_jensen_gap": round(max(gaps), 4) if gaps else 0.0,
         "uncertainty_basis": bases,

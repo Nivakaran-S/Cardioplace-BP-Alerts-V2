@@ -261,10 +261,11 @@ def chained_frame(d: dict) -> pd.DataFrame:
                                       or "not requested; set enrich.symptom_chained"]})
     return pd.DataFrame([{
         "symptom": _pretty(i.get("key")),
-        "in": f"{i.get('horizon')} session(s)",
-        "predicted SBP": _num(i.get("predicted_sbp")),
+        "at session": i.get("sessions_ahead"),
+        "conditioned through": f"session {i.get('conditioned_through_session')} "
+                               f"(SBP {_num(i.get('conditioned_through_sbp'))})",
         "risk": f"{100 * float(i['prob']):.1f}%",
-        "vs point estimate": f"{100 * float(i['jensen_gap']):+.1f} pp",
+        "uncertainty correction": f"{100 * float(i['jensen_gap']):+.1f} pp",
         "mechanism": i.get("mechanism") or "—",
         "red flag": "⚑" if i.get("red_flag") else "",
     } for i in items])
@@ -364,14 +365,25 @@ DISCLAIMER = """
 """
 
 CHAIN_NOTE = """
-**This is the forecast-conditioned answer** — the symptom heads scored on the *predicted*
-vitals rather than on today's, so it reads as one statement: *next session, SBP 158 and this
-much symptom risk.*
+**The symptom heads scored on the *forecast* trajectory rather than on today's readings.**
 
-`vs point estimate` is the correction for the forecast's own uncertainty. It matters most just
-below the 140 mmHg threshold, where a plug-in point estimate reports **exactly zero** excess
-risk. No alert flag is raised here: the operating cut was chosen on observed rows and does not
-carry its budget meaning to a forecast-conditioned one.
+Read the two columns together: *at session 3, conditioned through session 2 (SBP 158)*. Three
+things about that are worth knowing, and none of them are obvious from the number alone.
+
+**Sessions start at 2.** Scoring the very next session needs no forecast at all — that is the
+*Symptom risk* tab. The chain only has something to add once at least one predicted reading is
+in the history.
+
+**The head never sees the blood pressure of the session it scores.** Features at a session read
+only up to the one before, and the heads were trained that way — while the label generator
+drives the symptom from the *contemporaneous* pressure. So this conditions on the forecast
+trajectory up to the preceding session and helps through autocorrelation. That is a smaller
+claim than "conditioned on your predicted blood pressure", and it is the accurate one.
+
+**The uncertainty correction** is what integrating over the forecast's own spread adds. It
+matters most just below the 140 mmHg threshold, where a plug-in point estimate reports
+**exactly zero** excess risk. No alert flag is raised: the operating cut was chosen on observed
+rows and does not carry its budget meaning here.
 
 Only the systolic and weight-gain drivers are forecast, so the four hypotensive-mechanism
 symptoms — dizziness, syncope, palpitations, fatigue — gain nothing from this view, and

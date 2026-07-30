@@ -201,11 +201,19 @@ def _conditioning():
     chk("    and the difference is large, not noise", b > 2 * a, (a, b))
 
     multi = chained_symptom_risk(pred, hist, advisory_with([150.0, 158.0, 166.0]))
-    chk("one entry per (symptom, horizon)", len(multi["items"]) == 6, len(multi["items"]))
-    chk("horizons are reported as h+1, matching steps_ahead",
-        multi["horizons"] == [1, 2, 3], multi["horizons"])
-    chk("each item echoes the systolic it was conditioned on",
-        all(i["predicted_sbp"] is not None for i in multi["items"]))
+    chk("one entry per (symptom, session)", len(multi["items"]) == 6, len(multi["items"]))
+    # Appending j+1 forecasts moves the placeholder to session j+2 -- measured, not assumed.
+    chk("sessions start at 2, because session 1 cannot be chained",
+        multi["sessions_ahead"] == [2, 3, 4], multi["sessions_ahead"])
+    chk("each item names the session its conditioning ran through",
+        all(i["conditioned_through_session"] == i["sessions_ahead"] - 1
+            for i in multi["items"]), multi["items"][:2])
+    chk("each item echoes the systolic it was conditioned through",
+        all(i["conditioned_through_sbp"] is not None for i in multi["items"]))
+    chk("the payload states that session 1 is the direct block's job",
+        "direct symptom_risk" in multi["session_1_note"])
+    chk("*** the payload states the head never sees the scored session's own BP ***",
+        "CONTEMPORANEOUS" in multi["conditioning_note"])
 
 
 def _honesty():
