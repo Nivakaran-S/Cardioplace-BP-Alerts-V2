@@ -30,6 +30,28 @@ from src.serving.schemas import PredictRequest
 from src.serving.vocabulary import build_vocabulary
 from src.utils.ml_utils.rule_engine.registry import build_registry
 
+# ZeroGPU refuses to serve a Space that exposes no GPU entry point: it starts the app,
+# health-checks it, then kills it with "No @spaces.GPU function detected during startup".
+# This app has no GPU work to offer it -- the forecaster is fitted scikit-learn and the rule
+# engine is arithmetic -- so the decorated function below exists purely to satisfy that
+# contract, and is never called on any request path.
+#
+# The import is guarded because `spaces` is injected by the ZeroGPU image and is deliberately
+# NOT in requirements.txt: it pulls torch, which would add gigabytes to CI for a package that
+# does nothing off-Space. Off-Space this block is skipped entirely.
+try:
+    import spaces
+except ImportError:  # local runs, CI, Docker, `python app.py`
+    spaces = None
+
+if spaces is not None:
+
+    @spaces.GPU(duration=1)
+    def _zerogpu_entry_point() -> str:
+        """Declare a GPU entry point so ZeroGPU lets the Space start. Never invoked."""
+        return "ok"
+
+
 REGISTRY = ModelRegistry()
 RULES = build_registry()
 VOCAB = build_vocabulary(RULES)

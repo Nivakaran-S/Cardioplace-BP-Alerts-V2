@@ -145,8 +145,15 @@ The Space runs on **ZeroGPU**, which constrains the interpreter: ZeroGPU support
 Python 3.12.12 and 3.10.13, and the pinned numeric stack needs ≥3.11, so 3.12 is the only
 workable version — see the `python_version` note in this file's front matter. Hardware
 cannot be changed from CI to widen that choice; the API returns `402` on a free account
-even for a downgrade. Note that no code path is decorated with `@spaces.GPU`: this is a
-scikit-learn workload, so ZeroGPU is never actually allocated a GPU at run time.
+even for a downgrade.
+
+ZeroGPU also requires the app to expose at least one `@spaces.GPU` function, or it starts
+the Space, health-checks it, and then kills it with *"No @spaces.GPU function detected
+during startup"*. There is no GPU work here to offer — fitted scikit-learn and arithmetic —
+so `gradio_app.py` declares one such function purely to satisfy that contract, and never
+calls it on any request path. Its `import spaces` is guarded, because the ZeroGPU image
+injects that package and `requirements.txt` deliberately omits it: `spaces` pulls torch,
+which would cost CI gigabytes for a package that does nothing off-Space.
 
 **Test:**
 
