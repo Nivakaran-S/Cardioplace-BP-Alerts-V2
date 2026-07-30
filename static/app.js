@@ -550,6 +550,41 @@
       + " symptom heads are above their operating cut.";
   }
 
+  function renderChain(d) {
+    // The forecast-conditioned answer, deliberately a SEPARATE panel from renderSymptoms.
+    // They answer different questions -- risk at the next session from observed history, vs
+    // risk further out given the predicted trajectory -- and only the first is what the heads
+    // were trained to do. Replacing one with the other would hide that.
+    var ch = d.symptom_chained, panel = $("chain-panel");
+    if (!ch) { panel.hidden = true; return; }
+    panel.hidden = false;
+    $("chain-warning").textContent = (d.symptom_risk && d.symptom_risk.warning) || "";
+    var tb = $("chain-table").querySelector("tbody");
+    tb.innerHTML = "";
+    if (!ch.available) {
+      $("chain-limits").textContent = "";
+      $("chain-note").textContent = ch.reason || "";
+      return;
+    }
+    (ch.items || []).forEach(function (it) {
+      var gap = (it.jensen_gap || 0) * 100;
+      var tr = document.createElement("tr");
+      tr.innerHTML = "<td>" + esc(pretty(it.key)) + (it.red_flag
+          ? ' <span class="chip chip-critical">red flag</span>' : "") + "</td>"
+        + '<td class="num">' + esc(String(it.sessions_ahead)) + "</td>"
+        + "<td>session " + esc(String(it.conditioned_through_session))
+        + " (SBP " + fmt(it.conditioned_through_sbp, 1) + ")</td>"
+        + '<td class="num">' + fmt(it.prob * 100, 1) + "%</td>"
+        + '<td class="num">' + (gap >= 0 ? "+" : "") + fmt(gap, 1) + " pp</td>"
+        + "<td>" + esc(it.mechanism || "–") + "</td>";
+      tb.appendChild(tr);
+    });
+    // Both limits are load-bearing and neither is visible in the numbers.
+    $("chain-limits").textContent = (ch.session_1_note || "") + " "
+      + (ch.conditioning_note || "");
+    $("chain-note").textContent = (ch.cut_note || "") + " " + (ch.reach_note || "");
+  }
+
   function renderGovernance(d) {
     var g = (GOV || {});
     var host = $("gov-list");
@@ -587,6 +622,7 @@
      ["forecast chart", renderForecastChart], ["forecast table", renderForecastTable],
      ["predicted", renderPredicted], ["engine", renderEngine], ["anomaly", renderAnomaly],
      ["backtest", renderBacktest], ["symptoms", renderSymptoms],
+     ["chain", renderChain],
      ["governance", renderGovernance]].forEach(function (pair) {
       try { pair[1](d); }
       catch (e) { console.error("render " + pair[0] + " failed", e); }
@@ -627,7 +663,10 @@
         adherence_7d: Number($("adherence").value),
         step_offset: Number($("step-offset").value) || 0
       },
-      readings: rows
+      readings: rows,
+      // Opt in explicitly. It defaults off in EnrichFlags because it costs a feature build
+      // and ~15 head calls per session, and a caller that will not render it should not pay.
+      enrich: { symptom_chained: true }
     };
 
     var btn = $("btn-predict"), results = document.querySelector(".results");

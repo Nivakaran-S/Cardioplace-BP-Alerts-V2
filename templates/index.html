@@ -200,6 +200,19 @@
         <p id="symptom-note" class="caption"></p>
       </div>
 
+      <div class="card" id="chain-panel" hidden>
+        <h2>Predicted symptoms — scored on the forecast</h2>
+        <p id="chain-warning" class="notice warn"></p>
+        <div class="panel-scroll"><table id="chain-table">
+          <thead><tr><th>Symptom</th><th class="num">At session</th>
+            <th>Conditioned through</th><th class="num">Risk</th>
+            <th class="num">Uncertainty correction</th><th>Mechanism</th></tr></thead>
+          <tbody></tbody>
+        </table></div>
+        <p id="chain-limits" class="caption"></p>
+        <p id="chain-note" class="caption"></p>
+      </div>
+
       <div class="card">
         <h2>Governance</h2>
         <div id="gov-list" class="gov"></div>
