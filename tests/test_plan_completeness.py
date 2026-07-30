@@ -6,29 +6,37 @@ gets answered from memory -- and memory is what let a referenced-but-absent `saf
 sit in this repo unnoticed while `main.py` could not import.
 """
 
-import importlib
-import inspect
-import os
-import sys
 
-import app as A
-import src.components.data_ingestion as DI
-import src.components.data_validation as DV
-import src.utils.main_utils.utils as U
-import src.utils.ml_utils.model.detector as D
-import src.utils.ml_utils.model.estimator as E
-import src.utils.ml_utils.model.offset_learned as OL
-import src.utils.ml_utils.rule_engine.symptom_layer as SL
-from src.constants import training_pipeline as TP
-from src.utils.ml_utils.feature.causal_features import (
+import sys
+from pathlib import Path
+
+# `python tests/test_x.py` puts tests/ on sys.path, not the repo root, so `import src` fails.
+# The README documents running these files directly, so the fix belongs here rather than in a
+# PYTHONPATH the reader has to know to set. CI hit exactly this.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+import importlib  # noqa: E402
+import inspect  # noqa: E402
+import os  # noqa: E402
+
+import app as A  # noqa: E402
+import src.components.data_ingestion as DI  # noqa: E402
+import src.components.data_validation as DV  # noqa: E402
+import src.utils.main_utils.utils as U  # noqa: E402
+import src.utils.ml_utils.model.detector as D  # noqa: E402
+import src.utils.ml_utils.model.estimator as E  # noqa: E402
+import src.utils.ml_utils.model.offset_learned as OL  # noqa: E402
+import src.utils.ml_utils.rule_engine.symptom_layer as SL  # noqa: E402
+from src.constants import training_pipeline as TP  # noqa: E402
+from src.utils.ml_utils.feature.causal_features import (  # noqa: E402
     CausalFeatureBuilder,
     feature_group,
     leakage_audit,
 )
-from src.utils.ml_utils.feature.selection import MUST_KEEP, REDUNDANCY_R
-from src.utils.ml_utils.metric.regression_metric import select_and_decide, tie_set
-from src.utils.ml_utils.model.architectures import MODEL_SPEC
-from src.utils.ml_utils.model.classifier_head import eval_symptom, train_symptom_heads
+from src.utils.ml_utils.feature.selection import MUST_KEEP, REDUNDANCY_R  # noqa: E402
+from src.utils.ml_utils.metric.regression_metric import select_and_decide, tie_set  # noqa: E402
+from src.utils.ml_utils.model.architectures import MODEL_SPEC  # noqa: E402
+from src.utils.ml_utils.model.classifier_head import eval_symptom, train_symptom_heads  # noqa: E402
 
 FAILS = []
 

@@ -581,8 +581,21 @@ class BPPredictor:
 
     # ---------- persistence ----------
     def save(self, path: str) -> str:
+        """Write the bundle atomically.
+
+        `save_object` was already made write-then-rename for `final_model/model.pkl`; this
+        path was left writing in place, and it is the one the serving registry falls back to
+        when nothing has been promoted yet. A reader that stats the file mid-write sees a
+        fresh mtime and a truncated joblib archive. That is not hypothetical -- it surfaced
+        as a flaky API contract test while a training run was writing this exact file.
+        """
+        import os
+
         import joblib
-        joblib.dump(self.b, path)
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        tmp = f"{path}.tmp"
+        joblib.dump(self.b, tmp)
+        os.replace(tmp, path)          # atomic on the same filesystem, POSIX and Windows
         return path
 
     @classmethod

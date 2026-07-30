@@ -1,9 +1,22 @@
 """Smoke test for src/utils/ml_utils/safety/ -- gates must both pass AND be able to fail."""
-import numpy as np
-import pandas as pd
 
-from src.entity.config_entity import ModelTrainerConfig, TrainingPipelineConfig
-from src.utils.ml_utils.safety.gates import AbstentionPolicy, provenance_guard, run_safety_gates
+import sys
+from pathlib import Path
+
+# `python tests/test_x.py` puts tests/ on sys.path, not the repo root, so `import src` fails.
+# The README documents running these files directly, so the fix belongs here rather than in a
+# PYTHONPATH the reader has to know to set. CI hit exactly this.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+import numpy as np  # noqa: E402
+import pandas as pd  # noqa: E402
+
+from src.entity.config_entity import ModelTrainerConfig, TrainingPipelineConfig  # noqa: E402
+from src.utils.ml_utils.safety.gates import (  # noqa: E402
+    AbstentionPolicy,
+    provenance_guard,
+    run_safety_gates,
+)
 
 
 def test_safety_gates():

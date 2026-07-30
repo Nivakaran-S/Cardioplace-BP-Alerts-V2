@@ -6,14 +6,25 @@ matters most -- it is the only check in the pipeline that can catch a feature re
 and it has no structural analogue.
 """
 
+
 import sys
+from pathlib import Path
 
-import numpy as np
-import pandas as pd
+# `python tests/test_x.py` puts tests/ on sys.path, not the repo root, so `import src` fails.
+# The README documents running these files directly, so the fix belongs here rather than in a
+# PYTHONPATH the reader has to know to set. CI hit exactly this.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from src.entity.config_entity import ModelTrainerConfig, TrainingPipelineConfig
-from src.utils.ml_utils.feature.cadence import attach_cadence
-from src.utils.ml_utils.feature.causal_features import CausalFeatureBuilder, leakage_audit
+
+import numpy as np  # noqa: E402
+import pandas as pd  # noqa: E402
+
+from src.entity.config_entity import ModelTrainerConfig, TrainingPipelineConfig  # noqa: E402
+from src.utils.ml_utils.feature.cadence import attach_cadence  # noqa: E402
+from src.utils.ml_utils.feature.causal_features import (  # noqa: E402
+    CausalFeatureBuilder,
+    leakage_audit,
+)
 
 FAILS = []
 

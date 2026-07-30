@@ -6,15 +6,23 @@ is the one that matters most: it is the primary path on a fresh checkout, and th
 has to support is that an emergency reading still produces an emergency without any ML.
 """
 
-import datetime
-import json
-import re
+
 import sys
+from pathlib import Path
 
-from fastapi.testclient import TestClient
+# `python tests/test_x.py` puts tests/ on sys.path, not the repo root, so `import src` fails.
+# The README documents running these files directly, so the fix belongs here rather than in a
+# PYTHONPATH the reader has to know to set. CI hit exactly this.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import app as A
-from src.serving import settings as S
+import datetime  # noqa: E402
+import json  # noqa: E402
+import re  # noqa: E402
+
+from fastapi.testclient import TestClient  # noqa: E402
+
+import app as A  # noqa: E402
+from src.serving import settings as S  # noqa: E402
 
 FAILS = []
 

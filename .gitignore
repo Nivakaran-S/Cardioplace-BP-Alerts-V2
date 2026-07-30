@@ -25,4 +25,5 @@ cache/
 mlruns/
 *.joblib
 *.pkl
-*.pkl.tmp
+# write-then-rename leaves these behind only if a run is killed mid-save
+*.tmp
