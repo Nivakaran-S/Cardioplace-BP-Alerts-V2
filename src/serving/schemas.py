@@ -74,6 +74,11 @@ class Profile(_Base):
     conditions: list[str] = Field(default_factory=list)
     medications: list[str] = Field(default_factory=list)
     provider_target: float | None = Field(None, ge=80, le=200)
+    #: Target post-dialysis weight, in kg. Optional, and absent for anyone not on dialysis.
+    #: Training derived `idwg_rel` and `uf_rate` from it, so without it those stay NaN --
+    #: which is the honest state, not a reason to substitute the measured weight. Bounds match
+    #: SCHEMA_RANGES["weight"].
+    dryweight: float | None = Field(None, ge=25, le=220)
     missed_3d: int = Field(0, ge=0, le=3)
     adherence_7d: float = Field(1.0, ge=0.0, le=1.0)
     #: Where this history sits in the patient's real timeline. Without it a returning

@@ -10,6 +10,12 @@ import numpy as np
 import pandas as pd
 
 from src.utils.ml_utils.feature.cadence import attach_cadence
+from src.utils.ml_utils.rule_engine.symptom_layer import (
+    SYMPTOM_KEY_ALIAS,
+    SYMPTOM_MECHANISM,
+    SYMPTOM_RED_FLAG,
+    SYMPTOMS,
+)
 from src.utils.ml_utils.rule_engine.synthetic import CONDITION_KEYS, MED_KEYS, SYMPTOM_KEYS
 
 #: Columns `CausalFeatureBuilder._one_series` touches unconditionally. Every one has to
@@ -20,6 +26,18 @@ from src.utils.ml_utils.rule_engine.synthetic import CONDITION_KEYS, MED_KEYS, S
 REQUIRED_HISTORY_COLS = ("patient_id", "ts", "sbp", "dbp", "idwg", "weight",
                          "sbp_drop", "uf_total", "age", "is_male", "is_dm", "DM", "n_meas")
 
+#: serving key -> the canonical name the training layer used. `SYMPTOM_KEY_ALIAS` runs the
+#: other way (canonical -> serving), and five of the fifteen differ: `chest_pain` is submitted
+#: as `chest_pain_dyspnea`, `shortness_of_breath` as `sob`, and so on. Inverting it here rather
+#: than restating the pairs means the two directions cannot drift.
+_SERVING_TO_CANONICAL = {SYMPTOM_KEY_ALIAS.get(c, c): c for c in SYMPTOMS}
+
+#: The four serving keys with no training counterpart -- `new_onset_headache`, `ruq_pain`,
+#: `edema`, `nsaid_use`. They are rule-engine axes only. Emitting `sym_*` columns for them
+#: would hand the feature builder inputs the model never saw, so they are deliberately dropped
+#: on this path while still reaching the engine through `to_engine_panel`.
+_ENGINE_ONLY_SYMPTOMS = tuple(sorted(set(SYMPTOM_KEYS) - set(_SERVING_TO_CANONICAL)))
+
 
 def to_history(req) -> pd.DataFrame:
     """One row per submitted reading, in the shape the trained model expects.
@@ -29,23 +47,68 @@ def to_history(req) -> pd.DataFrame:
     train/serve distribution shift, it is disclosed in the governance panel, and it is what
     the missingness sweep quantifies -- it is not silently zero-filled, because zero UF is a
     clinically meaningful and wrong statement.
+
+    Symptoms and heart rate are a different case, and for a while this function got it wrong.
+    Both ARE submitted -- `Reading.symptoms` and `Reading.pulse` -- and both were collected
+    here and then dropped, so `_one_series` found no `sym_*` and no `heart_rate` column, took
+    its `if c not in g.columns: continue` branch, and the reindex in the serving path quietly
+    filled the resulting gap with NaN. That silently disabled **40 of the 175 selected
+    features** (36 symptom-history, 4 heart-rate) on every request: not a shift in their
+    values, an absence of them. HistGradientBoosting handles NaN natively, so nothing raised
+    and nothing logged.
+
+    So the rule is: NaN when the user genuinely cannot supply it, real when they can.
     """
     p = req.profile
+    dry = getattr(p, "dryweight", None)
     rows = []
     for r in req.readings:
-        rows.append({
+        # Canonical names, because that is what the feature builder was trained on. The four
+        # engine-only keys are dropped here on purpose -- see _ENGINE_ONLY_SYMPTOMS.
+        present = {_SERVING_TO_CANONICAL[k] for k in r.symptoms if k in _SERVING_TO_CANONICAL}
+        row = {
             "patient_id": req.patient_id,
             "ts": pd.Timestamp(r.date),
             "sbp": float(r.sbp), "dbp": float(r.dbp),
             "idwg": float(r.idwg) if r.idwg is not None else np.nan,
             "weight": float(r.weight) if r.weight is not None else np.nan,
+            "dryweight": float(dry) if dry is not None else np.nan,
             "sbp_drop": np.nan, "uf_total": np.nan,
             "age": float(p.age), "is_male": int(p.is_male), "is_dm": int(p.is_dm),
             "DM": float(p.is_dm), "n_meas": int(r.n_meas),
             "pulse": float(r.pulse) if r.pulse is not None else np.nan,
+            # `_one_series` reads `heart_rate`, not `pulse`. Same measurement, two names, and
+            # the rename is why hr_z / hr_d1 / shock_index_lag1 were all NaN at serving.
+            "heart_rate": float(r.pulse) if r.pulse is not None else np.nan,
             "position": r.position,
             "_symptoms": tuple(r.symptoms),
-        })
+        }
+        # `idwg_rel` is derived in the PANEL-prep stage (`causal_features.py:55-58`), which the
+        # serving path never runs -- `transform_for_inference` rebuilds only the scaffolding.
+        # So idwg_rel_lag1/mean7/mean30, all three of which survived selection, stayed NaN even
+        # once dry weight was supplied. Same expression and the same clip as the training side;
+        # a divergence here would mean the column means one thing at fit time and another at
+        # serve time, which is worse than it being absent.
+        if dry and r.idwg is not None and float(dry) > 0:
+            row["idwg_rel"] = float(np.clip(100.0 * float(r.idwg) / float(dry), 0, 12))
+        else:
+            row["idwg_rel"] = np.nan
+
+        for s in SYMPTOMS:
+            row[f"sym_{s}"] = int(s in present)
+        row["sym_any"] = int(bool(present))
+        row["sym_count"] = len(present)
+        # SYMPTOM_RED_FLAG is the TRAINING layer's set (6 symptoms), which is deliberately
+        # narrower than the 8 the UI marks with a flag -- the vocabulary also flags
+        # severe_headache and severe_epigastric_pain for clinical emphasis. The feature
+        # `sym_red_flag_lag1` was built from the training definition, so serving must use the
+        # training definition or the column means something different than it did at fit time.
+        # This is not the two sets drifting; they answer different questions.
+        row["sym_red_flag"] = int(bool(present & set(SYMPTOM_RED_FLAG)))
+        for mech in sorted(set(SYMPTOM_MECHANISM.values())):
+            row[f"sym_mech_{mech}"] = int(any(SYMPTOM_MECHANISM[s] == mech for s in present))
+        rows.append(row)
+
     df = pd.DataFrame(rows).sort_values("ts").reset_index(drop=True)
     for c in REQUIRED_HISTORY_COLS:
         if c not in df.columns:
