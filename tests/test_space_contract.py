@@ -61,6 +61,10 @@ def _parsing():
                      ("", "empty input"),
                      ("# only a comment", "no readings"),
                      ("2026-01-01, 140, 80, w=heavy", "a non-numeric keyed value"),
+                     # Dialysis fields the product no longer collects must be REJECTED, not
+                     # ignored: silently dropping one would let a caller believe a value they
+                     # pasted had reached the model.
+                     ("2026-01-01, 140, 80, idwg=2.1", "a withdrawn dialysis field"),
                      ("2026-01-01, 140, 80, meds=maybe", "a non-boolean meds="),
                      ("2026-01-01, 140, 80, wieght=72", "a misspelled field name")):
         try:
@@ -71,11 +75,9 @@ def _parsing():
 
     # The keyed tail. These are the per-session model inputs, so a token that parsed to the
     # wrong field would be worse than one that failed loudly.
-    r = G.parse_readings("2026-01-01, 140, 80, 72, w=74.2, idwg=2.1, meds=n, uf=2.4, "
-                         "hrs=4, drop=18, sym=dizziness+fatigue")[0]
-    for k, v in (("weight", 74.2), ("idwg", 2.1), ("took_all_meds", False),
-                 ("uf_total", 2.4), ("session_hours", 4.0), ("sbp_drop", 18.0),
-                 ("pulse", 72.0)):
+    r = G.parse_readings("2026-01-01, 140, 80, 72, w=74.2, meds=n, "
+                         "sym=dizziness+fatigue")[0]
+    for k, v in (("weight", 74.2), ("took_all_meds", False), ("pulse", 72.0)):
         chk(f"parser reads {k} from the keyed tail", r.get(k) == v, f"{k}={r.get(k)!r}")
     chk("parser splits sym= on +", r.get("symptoms") == ["dizziness", "fatigue"],
         r.get("symptoms"))
@@ -91,7 +93,10 @@ def _parsing():
     chk("*** both front ends accept the same reading-line tokens ***",
         set(G.TOKENS) == js_tokens, f"space={sorted(G.TOKENS)} spa={sorted(js_tokens)}")
     chk("    (control) the SPA token list was actually extracted",
-        {"w", "idwg", "uf"} <= js_tokens, sorted(js_tokens))
+        {"w", "weight"} <= js_tokens, sorted(js_tokens))
+    chk("    neither front end still accepts a dialysis field",
+        not ({"idwg", "uf", "hrs", "drop"} & (js_tokens | set(G.TOKENS))),
+        sorted({"idwg", "uf", "hrs", "drop"} & (js_tokens | set(G.TOKENS))))
 
 
 def _rendering():

@@ -49,17 +49,12 @@
           </p>
           <dl class="tokens">
             <dt>w=</dt><dd>weight, kg</dd>
-            <dt>idwg=</dt><dd>weight gain since last session, kg</dd>
             <dt>meds=</dt><dd>all medications taken that day — <code>y</code> or <code>n</code></dd>
-            <dt>uf=</dt><dd>fluid removed, litres</dd>
-            <dt>hrs=</dt><dd>session length, hours</dd>
-            <dt>drop=</dt><dd>intradialytic systolic fall, mmHg</dd>
             <dt>sym=</dt><dd>symptoms that session, joined by <code>+</code></dd>
           </dl>
           <p class="caption">
-            Everything after the pulse is optional, and each one feeds features the model was
-            fitted on. Weight unlocks the fluid-gain forecast; same-day adherence is the one
-            value the model may read from the day it predicts from.
+            Everything after the pulse is optional. Same-day adherence is the one value the
+            model may read from the day it forecasts from.
           </p>
         </div>
       </details>
@@ -82,14 +77,8 @@
       <details class="group">
         <summary>Clinical context</summary>
         <div class="group-body">
-          <div class="row-2">
-            <label class="field" for="provider-target"><span>Provider target SBP</span>
-              <input id="provider-target" type="number" min="100" max="179" placeholder="optional"></label>
-            <label class="field" for="dryweight"><span>Dry weight (kg)</span>
-              <input id="dryweight" type="number" min="25" max="220" step="0.1" placeholder="optional"></label>
-          </div>
-          <label class="field" for="first-dialysis"><span>First dialysis</span>
-            <input id="first-dialysis" type="date"></label>
+          <label class="field" for="provider-target"><span>Provider target SBP</span>
+            <input id="provider-target" type="number" min="100" max="179" placeholder="optional"></label>
           <div class="row-2">
             <label class="field" for="missed-3d"><span>Doses missed, 3d</span>
               <input id="missed-3d" type="number" min="0" max="3" value="0"></label>
@@ -139,19 +128,79 @@
 
     <section id="tiles" class="tiles" hidden></section>
 
-    <section class="card" id="trend-card" hidden>
-      <div class="card-head"><h3>Blood pressure and forecast</h3>
-        <span class="spacer"></span><span class="hint" id="trend-hint"></span></div>
+    <section class="card" id="sbp-card" hidden>
+      <div class="card-head"><h3>Forecast — systolic</h3>
+        <span class="spacer"></span><span class="hint" id="sbp-hint"></span></div>
       <div class="card-body">
-        <div class="legend" id="trend-legend"></div>
-        <figure><svg id="trend-chart" role="img" aria-labelledby="trend-desc"></svg>
-          <figcaption id="trend-desc"></figcaption></figure>
-        <details class="table-view"><summary>Forecast values</summary>
-          <div class="table-wrap"><table id="forecast-table">
-            <thead><tr><th>Signal</th><th class="num">In</th><th class="num">Predicted</th>
-              <th class="num">80% interval</th><th>Check</th></tr></thead><tbody></tbody>
-          </table></div>
-          <p class="caption" id="forecast-missing" hidden></p></details>
+        <div class="headline" id="sbp-headline"></div>
+        <div class="legend" id="sbp-legend"></div>
+        <figure><svg id="sbp-chart" role="img" aria-labelledby="sbp-desc"></svg>
+          <figcaption id="sbp-desc"></figcaption></figure>
+        <div class="conf" id="sbp-conf"></div>
+        <details class="table-view"><summary>Forecast values and accuracy</summary>
+          <div class="table-wrap"><table id="sbp-table">
+            <thead><tr><th class="num">In</th><th class="num">Predicted</th>
+              <th class="num">80% interval</th><th class="num">Typical error</th>
+              <th>Check</th></tr></thead><tbody></tbody></table></div>
+          <p class="caption" id="sbp-note"></p>
+        </details>
+      </div>
+    </section>
+
+    <section class="card" id="dbp-card" hidden>
+      <div class="card-head"><h3>Forecast — diastolic</h3>
+        <span class="spacer"></span><span class="hint" id="dbp-hint"></span></div>
+      <div class="card-body">
+        <div class="headline" id="dbp-headline"></div>
+        <div class="legend" id="dbp-legend"></div>
+        <figure><svg id="dbp-chart" role="img" aria-labelledby="dbp-desc"></svg>
+          <figcaption id="dbp-desc"></figcaption></figure>
+        <div class="conf" id="dbp-conf"></div>
+        <details class="table-view"><summary>Forecast values and accuracy</summary>
+          <div class="table-wrap"><table id="dbp-table">
+            <thead><tr><th class="num">In</th><th class="num">Predicted</th>
+              <th class="num">80% interval</th><th class="num">Typical error</th>
+              <th>Check</th></tr></thead><tbody></tbody></table></div>
+          <p class="caption" id="dbp-note"></p>
+        </details>
+      </div>
+    </section>
+
+    <section class="card" id="symptom-card" hidden>
+      <div class="card-head"><h3>Forecast — symptoms</h3>
+        <span class="spacer"></span><span class="hint" id="symptom-hint"></span></div>
+      <div class="card-body">
+        <div class="seg" id="symptom-seg" role="tablist"></div>
+        <div id="symptom-body"></div>
+        <p class="caption" id="symptom-note"></p>
+      </div>
+    </section>
+
+    <section class="card" id="offset-card" hidden>
+      <div class="card-head"><h3>Personalised alert threshold</h3>
+        <span class="spacer"></span><span class="hint" id="offset-hint"></span></div>
+      <div class="card-body">
+        <div class="headline" id="offset-headline"></div>
+        <figure><svg id="offset-chart" role="img" aria-labelledby="offset-desc"></svg>
+          <figcaption id="offset-desc"></figcaption></figure>
+        <p class="caption" id="offset-note"></p>
+      </div>
+    </section>
+
+    <section class="card" id="anomaly-card" hidden>
+      <div class="card-head"><h3>Anomaly detection</h3>
+        <span class="spacer"></span><span class="hint" id="anomaly-hint"></span></div>
+      <div class="card-body">
+        <div class="headline" id="anomaly-headline"></div>
+        <div class="meter" id="risk-meter">
+          <div class="track"><div class="fill"></div><div class="cut"></div></div>
+          <div class="scale"><span>0</span><span id="risk-cut-label"></span>
+            <span id="risk-scale-max">1</span></div>
+        </div>
+        <div class="legend" id="anomaly-legend"></div>
+        <figure><svg id="anomaly-chart" role="img" aria-labelledby="anomaly-desc"></svg>
+          <figcaption id="anomaly-desc"></figcaption></figure>
+        <p class="caption" id="anomaly-note"></p>
       </div>
     </section>
 
@@ -167,56 +216,17 @@
         </div>
       </section>
 
-      <section class="card" id="risk-card" hidden>
-        <div class="card-head"><h3>Early-warning signal</h3>
-          <span class="spacer"></span><span class="hint" id="risk-hint"></span></div>
+      <section class="card" id="engine-card" hidden>
+        <div class="card-head"><h3>Clinical rule engine</h3>
+          <span class="spacer"></span><span class="hint" id="engine-hint"></span></div>
         <div class="card-body">
-          <div class="meter" id="risk-meter">
-            <div class="track"><div class="fill"></div><div class="cut"></div></div>
-            <div class="scale"><span>0</span><span id="risk-cut-label"></span>
-              <span id="risk-scale-max">1</span></div>
-          </div>
-          <p class="caption" id="risk-note"></p>
-          <figure><svg id="risk-chart" role="img" aria-labelledby="risk-desc"></svg>
-            <figcaption id="risk-desc"></figcaption></figure>
+          <div class="table-wrap"><table id="engine-table">
+            <thead><tr><th>Date</th><th class="num">BP</th><th>Verdict</th><th>Rule</th></tr></thead>
+            <tbody></tbody></table></div>
+          <p class="caption" id="engine-note"></p>
         </div>
       </section>
     </div>
-
-    <section class="card" id="engine-card" hidden>
-      <div class="card-head"><h3>Clinical rule engine</h3>
-        <span class="spacer"></span><span class="hint" id="engine-hint"></span></div>
-      <div class="card-body">
-        <div class="table-wrap"><table id="engine-table">
-          <thead><tr><th>Date</th><th class="num">BP</th><th>Verdict</th><th>Rule</th></tr></thead>
-          <tbody></tbody></table></div>
-        <p class="caption" id="engine-note"></p>
-      </div>
-    </section>
-
-    <section class="card" id="accuracy-card" hidden>
-      <div class="card-head"><h3>Accuracy on this patient</h3>
-        <span class="spacer"></span><span class="hint">out-of-sample, replayed over the history</span></div>
-      <div class="card-body">
-        <div class="legend" id="accuracy-legend"></div>
-        <figure><svg id="accuracy-chart" role="img" aria-labelledby="accuracy-desc"></svg>
-          <figcaption id="accuracy-desc"></figcaption></figure>
-        <div class="table-wrap"><table id="accuracy-table">
-          <thead><tr><th class="num">Horizon</th><th class="num">Sessions scored</th>
-            <th class="num">Typical error</th><th class="num">Within 10 mmHg</th></tr></thead>
-          <tbody></tbody></table></div>
-        <p class="caption" id="accuracy-note"></p>
-      </div>
-    </section>
-
-    <section class="card" id="chain-card" hidden>
-      <div class="card-head"><h3>Symptom outlook</h3>
-        <span class="spacer"></span><span class="hint" id="chain-hint"></span></div>
-      <div class="card-body">
-        <div id="chain-body"></div>
-        <p class="caption" id="chain-note"></p>
-      </div>
-    </section>
 
     <section class="card" id="coverage-card" hidden>
       <div class="card-head"><h3>Model inputs used</h3>

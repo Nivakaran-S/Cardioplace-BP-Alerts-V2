@@ -209,51 +209,68 @@ def anomaly_block(predictor, F, history, advisory) -> dict:
 # ------------------------------------------------------------------------ backtest
 
 def backtest_block(predictor, F) -> dict:
-    """Actual vs predicted over the submitted history, three batched predicts.
+    """Actual vs predicted over the submitted history, batched, per signal.
 
-    `transform` already computed `y_sbp_h{h}`, so the targets come free and no re-serve loop
+    `transform` already computed `y_{sig}_h{h}`, so the targets come free and no re-serve loop
     is needed. Horizons are reported as h+1 to match `predict()`'s `steps_ahead`: reporting
     the raw shift here while the forecast table shows h+1 would reintroduce exactly the
     off-by-one the constants block documents fixing.
+
+    Scores every signal that has both a forecaster and a target, not just systolic. Diastolic
+    is the reason: it ships the EWMA baseline, so it has no fitted interval, and without a
+    per-patient error figure its card would have no honest confidence statement at all. The
+    top-level `horizons` and `series` stay systolic so existing readers are unaffected;
+    `signals` is the per-signal view the cards use.
     """
+    out = {"horizons": [], "series": {}, "signals": {},
+           "caption": ("These forecasters were fitted on the HEMOBP corpus and applied "
+                       "out-of-sample here. The features behind each point read only "
+                       "sessions before the one they predict.")}
     try:
         cfg = predictor.config
         cols = predictor.b["feature_names"]
         X = F.reindex(columns=cols)
         warm = int(cfg.cold_start_min_readings)
         med_gap = float(pd.Series(F.ts).diff().dt.days.median() or 2)
-        series, horizons = {}, []
-        for h in cfg.horizons:
-            mdl = (predictor.b["forecasters"] or {}).get(("sbp", h))
-            tgt = f"y_sbp_h{h}"
-            if mdl is None or tgt not in F.columns:
-                continue
-            try:
-                pred = np.asarray(mdl.predict(X), dtype=float)
-            except Exception:                                         # noqa: BLE001
-                continue
-            act = F[tgt].to_numpy(dtype=float)
-            m = np.isfinite(pred) & np.isfinite(act) & (F.step.to_numpy() >= warm)
-            if m.sum() < 3:
-                continue
-            err = pred[m] - act[m]
-            key = f"h{h + 1}"
-            series[key] = [
-                {"ts": str(pd.Timestamp(t).date()), "actual": round(float(a), 1),
-                 "predicted": round(float(p), 1), "error": round(float(e), 1)}
-                for t, a, p, e in zip(F.ts[m], act[m], pred[m], err)]
-            horizons.append({"horizon": h + 1,
-                             "days_ahead": round((h + 1) * med_gap, 1),
-                             "n": int(m.sum()),
-                             "mae": round(float(np.mean(np.abs(err))), 2),
-                             "within_10": round(float(np.mean(np.abs(err) <= 10)), 3)})
-        return {"horizons": horizons, "series": series,
-                "caption": ("These forecasters were fitted on the HEMOBP corpus and applied "
-                            "out-of-sample here. The features behind each point read only "
-                            "sessions before the one they predict.")}
+        shipped = predictor.b.get("shipped") or {}
+
+        for sig in ("sbp", "dbp"):
+            series, horizons = {}, []
+            for h in cfg.horizons:
+                mdl = (predictor.b["forecasters"] or {}).get((sig, h))
+                tgt = f"y_{sig}_h{h}"
+                if mdl is None or tgt not in F.columns:
+                    continue
+                try:
+                    pred = np.asarray(mdl.predict(X), dtype=float)
+                except Exception:                                     # noqa: BLE001
+                    continue
+                act = F[tgt].to_numpy(dtype=float)
+                m = np.isfinite(pred) & np.isfinite(act) & (F.step.to_numpy() >= warm)
+                if m.sum() < 3:
+                    continue
+                err = pred[m] - act[m]
+                series[f"h{h + 1}"] = [
+                    {"ts": str(pd.Timestamp(t).date()), "actual": round(float(a), 1),
+                     "predicted": round(float(pp), 1), "error": round(float(e), 1)}
+                    for t, a, pp, e in zip(F.ts[m], act[m], pred[m], err)]
+                horizons.append({"horizon": h + 1,
+                                 "days_ahead": round((h + 1) * med_gap, 1),
+                                 "n": int(m.sum()),
+                                 "mae": round(float(np.mean(np.abs(err))), 2),
+                                 "within_10": round(float(np.mean(np.abs(err) <= 10)), 3)})
+            if horizons:
+                fam = shipped.get(sig) or ("", "")
+                out["signals"][sig] = {"horizons": horizons, "series": series,
+                                       "family": fam[0] or None, "architecture": fam[1] or None}
+        sbp = out["signals"].get("sbp") or {}
+        out["horizons"] = sbp.get("horizons", [])
+        out["series"] = sbp.get("series", {})
+        return out
     except Exception as exc:                                         # noqa: BLE001
         logging.exception("backtest block failed")
-        return {"horizons": [], "series": {}, "error": f"{type(exc).__name__}: {exc}"}
+        out["error"] = f"{type(exc).__name__}: {exc}"
+        return out
 
 
 # ------------------------------------------------------------------ feature coverage
@@ -262,21 +279,27 @@ def backtest_block(predictor, F) -> dict:
 #: something about appear here; anything else is reported under its own stem with no advice,
 #: which is more honest than inventing one.
 _COVERAGE_ADVICE = {
-    "idwg": ("weight gain per session", "`idwg=` on each reading, or `w=` plus a dry weight"),
-    "idwg_rel": ("weight gain per session", "`idwg=` plus the profile dry weight"),
     "weight": ("weight per session", "`w=` on each reading"),
     "took_all_meds": ("same-day medication adherence", "`meds=y` or `meds=n` on each reading"),
     "missed_antihypertensive": ("same-day medication adherence",
                                 "`meds=` on each reading, plus the medication list"),
-    "uf": ("fluid removed per session", "`uf=` on each reading"),
-    "uf_rate": ("fluid removal rate", "`uf=` and `hrs=` on each reading, plus a dry weight"),
-    "uf_per_kg": ("fluid removed per session", "`uf=` on each reading, plus a dry weight"),
-    "sbp_drop": ("intradialytic pressure fall", "`drop=` on each reading"),
     "heart_rate": ("pulse", "a fourth number on each reading"),
-    "vintage_years": ("time on dialysis", "the first-dialysis date"),
     "has_hf": ("clinical conditions", "the conditions checklist"),
     "has_ihd": ("clinical conditions", "the conditions checklist"),
     "has_afib": ("clinical conditions", "the conditions checklist"),
+}
+
+#: Fitted features this product deliberately does not collect, because they are dialysis
+#: measurements and this is a blood-pressure service. Reported separately from the actionable
+#: gaps: telling someone to supply a field the API does not accept would be a bug report
+#: dressed as advice.
+_NOT_COLLECTED = {
+    "idwg": "interdialytic weight gain", "idwg_rel": "weight gain as % of dry weight",
+    "uf": "ultrafiltration volume", "uf_rate": "ultrafiltration rate",
+    "uf_per_kg": "ultrafiltration per kg", "sbp_drop": "intradialytic pressure fall",
+    "vintage_years": "time on dialysis", "idwg_x_sbp": "weight-gain x pressure-slope",
+    "idwg_mom_3_14": "weight-gain momentum", "idwg_excess_base": "weight-gain excess",
+    "idwg_ewm_resid": "weight-gain residual",
 }
 _MED_STEMS = ("on_ace", "on_arb", "on_bb", "on_loop", "on_nsaid")
 
@@ -315,10 +338,12 @@ def feature_coverage_block(predictor, F) -> dict:
         row = F.reindex(columns=cols).iloc[-1]
         missing = [c for c in cols if pd.isna(row[c])]
 
-        needs_input, needs_history = {}, []
+        needs_input, needs_history, not_collected = {}, [], {}
         for c in missing:
             st = _stem(c)
-            if st in _COVERAGE_ADVICE or st in _MED_STEMS:
+            if st in _NOT_COLLECTED:
+                not_collected.setdefault(_NOT_COLLECTED[st], []).append(c)
+            elif st in _COVERAGE_ADVICE or st in _MED_STEMS:
                 what, how = _COVERAGE_ADVICE.get(
                     st, ("prescribed medications", "the medications checklist"))
                 needs_input.setdefault((what, how), []).append(c)
@@ -331,6 +356,8 @@ def feature_coverage_block(predictor, F) -> dict:
             ({"supply": what, "how": how, "features": len(cs),
               "examples": sorted(cs)[:4]} for (what, how), cs in needs_input.items()),
             key=lambda g: -g["features"])
+        nc = sorted(({"measurement": what, "features": len(cs)}
+                     for what, cs in not_collected.items()), key=lambda g: -g["features"])
         return {
             "fitted": len(cols),
             "resolved": len(cols) - len(missing),
@@ -338,6 +365,17 @@ def feature_coverage_block(predictor, F) -> dict:
             "pct": round(100.0 * (len(cols) - len(missing)) / max(len(cols), 1), 1),
             "gaps": gaps,
             "needs_more_sessions": len(needs_history),
+            # Reported apart from `gaps` on purpose. These are dialysis measurements the
+            # forecaster was fitted on and this service does not collect, so they are a
+            # standing cost of using a haemodialysis-derived model for blood pressure -- not
+            # something the caller forgot. Advising someone to supply them would be a bug
+            # report dressed as a suggestion.
+            "not_collected": nc,
+            "not_collected_features": sum(g["features"] for g in nc),
+            "not_collected_note": (
+                "Dialysis measurements the forecaster was fitted on. This service does not "
+                "collect them, so they are permanently absent rather than missing from this "
+                "request."),
             "note": ("Features the model was fitted on that carry no value for this request. "
                      "They do not raise -- the estimator consumes them as missing -- so the "
                      "forecast is still returned, computed from the rest."),
@@ -393,12 +431,35 @@ def symptom_block(predictor, history, as_of=None, full: bool = False,
                 continue
             cut = float(cuts.get(key, np.nan))
             base = key.rsplit("_h", 1)[0]
-            items.append({"key": key, "label": LABELS.get(base, base),
-                          "horizon": int(key.rsplit("_h", 1)[1]) + 1 if "_h" in key else None,
-                          "prob": round(p, 4),
-                          "cut": round(cut, 4) if np.isfinite(cut) else None,
-                          "flagged": bool(np.isfinite(cut) and p >= cut),
-                          "mechanism": mech.get(key), "red_flag": base in reds})
+            item = {"key": key, "label": LABELS.get(base, base),
+                    "horizon": int(key.rsplit("_h", 1)[1]) + 1 if "_h" in key else None,
+                    "prob": round(p, 4),
+                    "cut": round(cut, 4) if np.isfinite(cut) else None,
+                    "flagged": bool(np.isfinite(cut) and p >= cut),
+                    "mechanism": mech.get(key), "red_flag": base in reds}
+
+            # The Venn-Abers pair, which is the honest confidence statement and was being
+            # computed and thrown away. `predict_proba` collapses (p0, p1) to a point; the
+            # WIDTH of the pair is how much the calibration set actually knows here, and at a
+            # 1% base rate a bare probability of 0.004 looks equally authoritative whether
+            # four hundred calibration examples support it or two. Absent when the head fell
+            # back to isotonic -- reported as null rather than faked from the point estimate.
+            lo = hi = None
+            try:
+                cal = getattr(mdl, "calibrated_", None) or mdl
+                if hasattr(cal, "predict_interval"):
+                    p0, p1 = cal.predict_interval(X)
+                    lo, hi = float(np.ravel(p0)[0]), float(np.ravel(p1)[0])
+            except Exception:                                         # noqa: BLE001
+                lo = hi = None
+            if lo is not None and np.isfinite(lo) and np.isfinite(hi):
+                item["prob_lo"] = round(min(lo, hi), 4)
+                item["prob_hi"] = round(max(lo, hi), 4)
+                item["confidence_basis"] = "Venn-Abers pair on the calibration split"
+            else:
+                item["prob_lo"] = item["prob_hi"] = None
+                item["confidence_basis"] = "isotonic fallback -- no distribution-free interval"
+            items.append(item)
         # Red flags first, then by how far past its own cut each one sits. Never averaged
         # into a mechanism score: a red flag next to fatigue is not half a red flag.
         items.sort(key=lambda d: (not d["red_flag"], -(d["prob"] - (d["cut"] or 0))))

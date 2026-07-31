@@ -60,42 +60,30 @@ _ANTIHYPERTENSIVES = ("on_ace", "on_arb", "on_bb")
 def to_history(req) -> pd.DataFrame:
     """One row per submitted reading, in the shape the trained model expects.
 
-    `sbp_drop` and `uf_total` are intradialytic quantities: a journaling app cannot supply
-    them, so they are NaN here while they were populated in training. That is a real
-    train/serve distribution shift, it is disclosed in the governance panel, and it is what
-    the missingness sweep quantifies -- it is not silently zero-filled, because zero UF is a
-    clinically meaningful and wrong statement.
+    Two kinds of absence, and keeping them apart is the whole job of this function.
 
-    Symptoms and heart rate are a different case, and for a while this function got it wrong.
-    Both ARE submitted -- `Reading.symptoms` and `Reading.pulse` -- and both were collected
-    here and then dropped, so `_one_series` found no `sym_*` and no `heart_rate` column, took
-    its `if c not in g.columns: continue` branch, and the reindex in the serving path quietly
-    filled the resulting gap with NaN. That silently disabled **40 of the 175 selected
-    features** (36 symptom-history, 4 heart-rate) on every request: not a shift in their
-    values, an absence of them. HistGradientBoosting handles NaN natively, so nothing raised
-    and nothing logged.
+    **Accidentally absent** is a bug, and an invisible one: `_one_series` skips columns it
+    cannot find, the serving reindex fills the gap with NaN, and HistGradientBoosting consumes
+    NaN natively -- no exception, no log line, no failing test. It has happened twice here.
+    First `sym_*` and `heart_rate` were collected and then dropped, disabling 40 of the 175
+    selected features on every request. Then static conditions and medications turned out to
+    reach `to_engine_panel` and not this frame, medication adherence reached neither, and the
+    total came to 65 of 175. Both are fixed: what the user submits, the model sees.
 
-    So the rule is: NaN when the user genuinely cannot supply it, real when they can.
+    **Deliberately absent** is a product decision and is stated rather than hidden. This is a
+    blood-pressure service, so it does not ask for interdialytic weight gain, ultrafiltration
+    volume or rate, session length, intradialytic pressure drop, dry weight or dialysis
+    vintage -- a field nobody can fill implies the answer degrades for a reason the user could
+    fix, which is worse than an honest gap. The forecaster was fitted on a haemodialysis
+    corpus and those features were populated then, so this is a real train/serve shift with a
+    known cost; `feature_coverage` reports it per request.
 
-    Applying that rule again turned up three more groups that were NaN for no better reason
-    than that nothing carried them across, costing **65 of the 175 selected features** on a
-    request that supplied everything the API accepted:
-
-    * **Static conditions and medications.** `to_engine_panel` emits them, this function did
-      not, so `has_hf` / `on_ace` / ... reached the rule engine and never reached the model.
-      The checkbox was ticked and the forecaster saw NaN.
-    * **Medication adherence.** `took_all_meds` and `missed_antihypertensive` were emitted
-      nowhere, which left `took_all_meds_lag1/_mean7/_mean30`, the matching
-      `missed_antihypertensive_*`, and `adh_took_all_meds_today` all NaN.
-    * **Dialysis session values.** `sbp_drop` and `uf_total` were hardcoded NaN even when the
-      caller could supply them.
-
-    `uf_rate` and `vintage_years` get the same treatment `idwg_rel` already had: derived here
-    with the training expression, because they are built in the panel-prep stage
-    (`causal_features.py:55-71`) that the serving path never runs.
+    The columns still have to EXIST, because `_one_series` reads several unconditionally and a
+    missing one raises inside a CustomException, turning a valid request into a 500. So they
+    are NaN, never zero: zero ultrafiltration is a clinically meaningful and wrong statement.
     """
+
     p = req.profile
-    dry = getattr(p, "dryweight", None)
 
     # Time-invariant, so computed once. Aliased to the training names -- see _CONDITION_ALIAS.
     conds = {_CONDITION_ALIAS.get(k, k) for k in p.conditions}
@@ -103,9 +91,6 @@ def to_history(req) -> pd.DataFrame:
     static = {k: int(k in conds) for k in _MODEL_CONDITIONS}
     static.update({k: int(k in meds) for k in _MODEL_MEDS})
     on_antihypertensive = any(k in meds for k in _ANTIHYPERTENSIVES)
-
-    first_dx = getattr(p, "first_dialysis", None)
-    first_ts = pd.Timestamp(first_dx) if first_dx else None
 
     rows = []
     for r in req.readings:
@@ -116,14 +101,13 @@ def to_history(req) -> pd.DataFrame:
             "patient_id": req.patient_id,
             "ts": pd.Timestamp(r.date),
             "sbp": float(r.sbp), "dbp": float(r.dbp),
-            "idwg": float(r.idwg) if r.idwg is not None else np.nan,
             "weight": float(r.weight) if r.weight is not None else np.nan,
-            "dryweight": float(dry) if dry is not None else np.nan,
-            # Real when the caller can supply them, NaN when they cannot -- never zero-filled.
-            "sbp_drop": float(r.sbp_drop) if r.sbp_drop is not None else np.nan,
-            "uf_total": float(r.uf_total) if r.uf_total is not None else np.nan,
-            "session_hours": (float(r.session_hours) if r.session_hours is not None
-                              else np.nan),
+            # The dialysis columns still have to EXIST -- `_one_series` reads several of them
+            # unconditionally and a missing column raises inside a CustomException, turning a
+            # valid request into a 500. NaN is the honest value: this product does not collect
+            # them, and NaN is what the feature builder was built to absorb.
+            "idwg": np.nan, "dryweight": np.nan, "sbp_drop": np.nan,
+            "uf_total": np.nan, "session_hours": np.nan,
             "age": float(p.age), "is_male": int(p.is_male), "is_dm": int(p.is_dm),
             "DM": float(p.is_dm), "n_meas": int(r.n_meas),
             **static,
@@ -134,27 +118,11 @@ def to_history(req) -> pd.DataFrame:
             "position": r.position,
             "_symptoms": tuple(r.symptoms),
         }
-        # `idwg_rel` is derived in the PANEL-prep stage (`causal_features.py:55-58`), which the
-        # serving path never runs -- `transform_for_inference` rebuilds only the scaffolding.
-        # So idwg_rel_lag1/mean7/mean30, all three of which survived selection, stayed NaN even
-        # once dry weight was supplied. Same expression and the same clip as the training side;
-        # a divergence here would mean the column means one thing at fit time and another at
-        # serve time, which is worse than it being absent.
-        if dry and r.idwg is not None and float(dry) > 0:
-            row["idwg_rel"] = float(np.clip(100.0 * float(r.idwg) / float(dry), 0, 12))
-        else:
-            row["idwg_rel"] = np.nan
-
-        # Same story as idwg_rel: built in panel-prep (`causal_features.py:59-64`), which the
-        # serving path never runs, so uf_rate_lag1/mean7/mean30 stayed NaN even with uf_total
-        # supplied. Same expression, same x1000 (uf_total is litres), same clip -- a
-        # divergence here would mean the column means one thing at fit time and another now.
-        if (dry and r.uf_total is not None and r.session_hours is not None
-                and float(dry) > 0 and float(r.session_hours) > 0):
-            row["uf_rate"] = float(np.clip(
-                (float(r.uf_total) * 1000.0) / (float(r.session_hours) * float(dry)), 0, 30))
-        else:
-            row["uf_rate"] = np.nan
+        # idwg_rel and uf_rate were derived here while the fields were collected. Both are
+        # functions of inputs this product no longer asks for, so they are NaN by
+        # construction rather than by omission.
+        row["idwg_rel"] = np.nan
+        row["uf_rate"] = np.nan
 
         # THE ONE SAME-DAY EXCEPTION. `_one_series` emits this as `adh_took_all_meds_today`
         # and lags it for the rest; see the field docstring on `Reading.took_all_meds`.
@@ -168,9 +136,8 @@ def to_history(req) -> pd.DataFrame:
             row["took_all_meds"] = took
             row["missed_antihypertensive"] = int(took == 0 and on_antihypertensive)
 
-        # Years on dialysis at THIS session, so a long history does not carry one flat value.
-        row["vintage_years"] = (float(np.clip((row["ts"] - first_ts).days / 365.25, 0, 40))
-                                if first_ts is not None else np.nan)
+        # Dialysis vintage: not a quantity a cardiovascular BP service has.
+        row["vintage_years"] = np.nan
 
         for s in SYMPTOMS:
             row[f"sym_{s}"] = int(s in present)

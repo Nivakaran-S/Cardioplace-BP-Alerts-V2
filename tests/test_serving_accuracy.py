@@ -71,20 +71,19 @@ def _request(g, upto):
     for r in h.itertuples():
         row = {"date": str(pd.Timestamp(r.ts).date()),
                "sbp": int(round(r.sbp)), "dbp": int(round(r.dbp))}
-        for c in ("weight", "idwg", "uf_total", "session_hours", "sbp_drop"):
-            v = getattr(r, c, np.nan)
-            if pd.notna(v):
-                row[c] = float(v)
+        # Only what this product collects. The corpus carries interdialytic weight gain,
+        # ultrafiltration and the intradialytic pressure drop, and the forecaster was fitted
+        # on them -- but a blood-pressure service does not ask for them, so scoring with them
+        # would measure a model this deployment cannot actually run.
+        v = getattr(r, "weight", np.nan)
+        if pd.notna(v):
+            row["weight"] = float(v)
         rows.append(row)
     last = h.iloc[-1]
     prof = {"age": float(last.age) if pd.notna(last.age) else 65.0,
             "is_male": int(str(last.gender).upper().startswith("M"))
             if pd.notna(last.gender) else 0,
             "is_dm": int(bool(last.DM)) if pd.notna(last.DM) else 0}
-    if pd.notna(last.dryweight):
-        prof["dryweight"] = float(last.dryweight)
-    if pd.notna(last.first_dialysis_ts):
-        prof["first_dialysis"] = str(pd.Timestamp(last.first_dialysis_ts).date())
     return PredictRequest(patient_id=str(last.patient_id), readings=rows, profile=prof)
 
 

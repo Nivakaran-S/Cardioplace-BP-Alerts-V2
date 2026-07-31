@@ -78,46 +78,46 @@ SEV_COLOUR = {"critical": ("#b3261e", "#fdeceb"), "watch": ("#8a5300", "#fff6e5"
 _TARGET_LO = 100
 _TARGET_HI = int(EMERGENCY_FLOOR_MMHG) - 1
 
-SAMPLE = """2026-03-31, 138, 78, 74, w=73.4, idwg=1.90, meds=n, uf=2.2, hrs=4
-2026-04-02, 140, 79, 75, w=73.7, idwg=2.05, meds=y, uf=2.3, hrs=4
-2026-04-04, 142, 80, 76, w=74.0, idwg=2.20, meds=y, uf=2.4, hrs=4
-2026-04-06, 147, 81, 77, w=74.3, idwg=2.35, meds=y, uf=2.5, hrs=4
-2026-04-08, 149, 82, 78, w=74.6, idwg=2.50, meds=y, uf=2.2, hrs=4
-2026-04-10, 152, 78, 79, w=74.9, idwg=2.65, meds=n, uf=2.3, hrs=4
-2026-04-12, 157, 79, 80, w=73.4, idwg=1.90, meds=y, uf=2.4, hrs=4
-2026-04-14, 138, 80, 81, w=73.7, idwg=2.05, meds=y, uf=2.5, hrs=4
-2026-04-16, 140, 81, 82, w=74.0, idwg=2.20, meds=y, uf=2.2, hrs=4
-2026-04-18, 145, 82, 74, w=74.3, idwg=2.35, meds=y, uf=2.3, hrs=4
-2026-04-20, 147, 78, 75, w=74.6, idwg=2.50, meds=n, uf=2.4, hrs=4
-2026-04-22, 149, 79, 76, w=74.9, idwg=2.65, meds=y, uf=2.5, hrs=4
-2026-04-24, 155, 80, 77, w=73.4, idwg=1.90, meds=y, uf=2.2, hrs=4
-2026-04-26, 157, 81, 78, w=73.7, idwg=2.05, meds=y, uf=2.3, hrs=4
-2026-04-28, 138, 82, 79, w=74.0, idwg=2.20, meds=y, uf=2.4, hrs=4
-2026-04-30, 143, 78, 80, w=74.3, idwg=2.35, meds=n, uf=2.5, hrs=4
-2026-05-02, 145, 79, 81, w=74.6, idwg=2.50, meds=y, uf=2.2, hrs=4
-2026-05-04, 147, 80, 82, w=74.9, idwg=2.65, meds=y, uf=2.3, hrs=4
-2026-05-06, 152, 81, 74, w=73.4, idwg=1.90, meds=y, uf=2.4, hrs=4
-2026-05-08, 154, 82, 75, w=73.7, idwg=2.05, meds=y, uf=2.5, hrs=4
-2026-05-10, 156, 78, 76, w=74.0, idwg=2.20, meds=n, uf=2.2, hrs=4
-2026-05-12, 141, 79, 77, w=74.3, idwg=2.35, meds=y, uf=2.3, hrs=4
-2026-05-14, 143, 80, 78, w=74.6, idwg=2.50, meds=y, uf=2.4, hrs=4
-2026-05-16, 145, 81, 79, w=74.9, idwg=2.65, meds=y, uf=2.5, hrs=4
-2026-05-18, 150, 82, 80, w=73.4, idwg=1.90, meds=y, uf=2.2, hrs=4
-2026-05-20, 152, 78, 81, w=73.7, idwg=2.05, meds=n, uf=2.3, hrs=4
-2026-05-22, 154, 79, 82, w=74.0, idwg=2.20, meds=y, uf=2.4, hrs=4
-2026-05-24, 159, 80, 74, w=74.3, idwg=2.35, meds=y, uf=2.5, hrs=4
-2026-05-26, 141, 81, 75, w=74.6, idwg=2.50, meds=y, uf=2.2, hrs=4
-2026-05-28, 143, 82, 76, w=74.9, idwg=2.65, meds=y, uf=2.3, hrs=4
-2026-05-30, 148, 78, 77, w=73.4, idwg=1.90, meds=n, uf=2.4, hrs=4
-2026-06-01, 150, 79, 78, w=73.7, idwg=2.05, meds=y, uf=2.5, hrs=4
-2026-06-03, 152, 80, 79, w=74.0, idwg=2.20, meds=y, uf=2.2, hrs=4
-2026-06-05, 157, 81, 80, w=74.3, idwg=2.35, meds=y, uf=2.3, hrs=4
-2026-06-07, 159, 82, 81, w=74.6, idwg=2.50, meds=y, uf=2.4, hrs=4
-2026-06-09, 140, 78, 82, w=74.9, idwg=2.65, meds=n, uf=2.5, hrs=4
-2026-06-11, 145, 79, 74, w=73.4, idwg=1.90, meds=y, uf=2.2, hrs=4
-2026-06-13, 148, 80, 75, w=73.7, idwg=2.05, meds=y, uf=2.3, hrs=4
-2026-06-15, 150, 81, 76, w=74.0, idwg=2.20, meds=y, uf=2.4, hrs=4
-2026-06-17, 155, 82, 77, w=74.3, idwg=2.35, meds=y, uf=2.5, hrs=4"""
+SAMPLE = """2026-03-31, 138, 78, 74, w=73.4, meds=n
+2026-04-02, 140, 79, 75, w=73.7, meds=y
+2026-04-04, 142, 80, 76, w=74.0, meds=y
+2026-04-06, 147, 81, 77, w=74.3, meds=y
+2026-04-08, 149, 82, 78, w=74.6, meds=y
+2026-04-10, 152, 78, 79, w=74.9, meds=n
+2026-04-12, 157, 79, 80, w=73.4, meds=y
+2026-04-14, 138, 80, 81, w=73.7, meds=y
+2026-04-16, 140, 81, 82, w=74.0, meds=y
+2026-04-18, 145, 82, 74, w=74.3, meds=y
+2026-04-20, 147, 78, 75, w=74.6, meds=n
+2026-04-22, 149, 79, 76, w=74.9, meds=y
+2026-04-24, 155, 80, 77, w=73.4, meds=y
+2026-04-26, 157, 81, 78, w=73.7, meds=y
+2026-04-28, 138, 82, 79, w=74.0, meds=y
+2026-04-30, 143, 78, 80, w=74.3, meds=n
+2026-05-02, 145, 79, 81, w=74.6, meds=y
+2026-05-04, 147, 80, 82, w=74.9, meds=y
+2026-05-06, 152, 81, 74, w=73.4, meds=y
+2026-05-08, 154, 82, 75, w=73.7, meds=y
+2026-05-10, 156, 78, 76, w=74.0, meds=n
+2026-05-12, 141, 79, 77, w=74.3, meds=y
+2026-05-14, 143, 80, 78, w=74.6, meds=y
+2026-05-16, 145, 81, 79, w=74.9, meds=y
+2026-05-18, 150, 82, 80, w=73.4, meds=y
+2026-05-20, 152, 78, 81, w=73.7, meds=n
+2026-05-22, 154, 79, 82, w=74.0, meds=y
+2026-05-24, 159, 80, 74, w=74.3, meds=y
+2026-05-26, 141, 81, 75, w=74.6, meds=y
+2026-05-28, 143, 82, 76, w=74.9, meds=y
+2026-05-30, 148, 78, 77, w=73.4, meds=n
+2026-06-01, 150, 79, 78, w=73.7, meds=y
+2026-06-03, 152, 80, 79, w=74.0, meds=y
+2026-06-05, 157, 81, 80, w=74.3, meds=y
+2026-06-07, 159, 82, 81, w=74.6, meds=y
+2026-06-09, 140, 78, 82, w=74.9, meds=n
+2026-06-11, 145, 79, 74, w=73.4, meds=y
+2026-06-13, 148, 80, 75, w=73.7, meds=y
+2026-06-15, 150, 81, 76, w=74.0, meds=y
+2026-06-17, 155, 82, 77, w=74.3, meds=y"""
 
 
 # --------------------------------------------------------------------------- parsing
@@ -125,8 +125,7 @@ SAMPLE = """2026-03-31, 138, 78, 74, w=73.4, idwg=1.90, meds=n, uf=2.2, hrs=4
 #: `key=` token -> the `Reading` field it fills. Mirrors `TOKENS` in `static/app.js`: the two
 #: front ends must accept the same history, or the same paste produces a different forecast
 #: depending on which one the user opened.
-TOKENS = {"w": "weight", "weight": "weight", "idwg": "idwg", "uf": "uf_total",
-          "hrs": "session_hours", "drop": "sbp_drop"}
+TOKENS = {"w": "weight", "weight": "weight"}
 
 
 def parse_readings(text: str) -> list[dict]:
@@ -246,8 +245,13 @@ def forecast_frame(d: dict) -> pd.DataFrame:
     only, so a blank interval on the other rows is the true state of the bundle, not a
     rendering failure. The basis column says which.
     """
+    # Systolic and diastolic only. Interdialytic weight gain is in the bundle -- the
+    # forecaster was fitted on a haemodialysis corpus -- but this is a blood-pressure service
+    # and does not collect the inputs it needs, so it is neither asked for nor shown.
     rows = []
-    for sig, per_h in (d.get("forecast") or {}).items():
+    for sig, per_h in sorted((d.get("forecast") or {}).items()):
+        if sig not in ("sbp", "dbp"):
+            continue
         for key, f in (per_h or {}).items():
             if not isinstance(f, dict):
                 continue
@@ -345,10 +349,16 @@ def coverage_frame(d: dict) -> pd.DataFrame:
     gaps = blk.get("gaps") or []
     head = (f"{blk['resolved']} of {blk['fitted']} inputs carried a value "
             f"({blk['pct']}%)")
-    if not gaps:
+    rows = [{"not supplied": g["supply"], "features": g["features"],
+             "how to supply it": g["how"].replace("`", "")} for g in gaps]
+    # Reported alongside, but never as advice: these are dialysis measurements the forecaster
+    # was fitted on and this service does not collect.
+    rows += [{"not supplied": g["measurement"], "features": g["features"],
+              "how to supply it": "not collected — a dialysis measurement"}
+             for g in (blk.get("not_collected") or [])]
+    if not rows:
         return pd.DataFrame([{"not supplied": "—", "features": 0, "how to supply it": head}])
-    return pd.DataFrame([{"not supplied": g["supply"], "features": g["features"],
-                          "how to supply it": g["how"].replace("`", "")} for g in gaps])
+    return pd.DataFrame(rows)
 
 
 def symptom_frame(d: dict) -> pd.DataFrame:
@@ -357,11 +367,21 @@ def symptom_frame(d: dict) -> pd.DataFrame:
     if not items:
         return pd.DataFrame({"note": [blk.get("note")
                                       or "no symptom heads in this bundle"]})
+    def _band(s):
+        lo, hi = s.get("prob_lo"), s.get("prob_hi")
+        if lo is None or hi is None:
+            return s.get("confidence_basis") or "—"
+        return f"{100 * float(lo):.2f} – {100 * float(hi):.2f}%"
+
     return pd.DataFrame([{"symptom": s.get("label") or _pretty(s.get("key")),
                           "horizon": s.get("horizon"),
                           "mechanism": s.get("mechanism") or "—",
                           "red flag": "⚑" if s.get("red_flag") else "",
                           "probability": _num(s.get("prob"), 3),
+                          # The Venn-Abers pair: a calibrated interval on the probability
+                          # itself, so a number backed by little calibration data reads as
+                          # uncertain rather than merely small.
+                          "confidence range": _band(s),
                           "cut": _num(s.get("cut"), 3),
                           "flagged": "yes" if s.get("flagged") else ""}
                          for s in items])
@@ -384,7 +404,7 @@ def _error(html: str) -> tuple:
 
 def assess(readings_text, patient_id, age, sex, diabetic, pregnant, hf_type, provider_target,
            conditions, medications, symptoms, position, missed_3d, adherence_7d,
-           chained=False, dryweight=None, first_dialysis=None):
+           chained=False):
     try:
         rows = parse_readings(readings_text)
     except ValueError as exc:
@@ -414,13 +434,6 @@ def assess(readings_text, patient_id, age, sex, diabetic, pregnant, hf_type, pro
     }
     # Falsy covers both ways this optional field arrives empty: None from the initial render,
     # and 0 from a box the user cleared. Neither is a target of 0 mmHg.
-    # Both feed the model rather than the engine. Dry weight turns the raw weights in the
-    # history into idwg_rel and uf_rate; the first-dialysis date is what vintage_years is
-    # derived from. Without them those features are NaN however complete the history is.
-    if dryweight:
-        profile["dryweight"] = float(dryweight)
-    if first_dialysis:
-        profile["first_dialysis"] = str(first_dialysis)
     if provider_target:
         if not _TARGET_LO <= float(provider_target) <= _TARGET_HI:
             return _error(
@@ -536,14 +549,6 @@ def build_demo():
                     conditions = gr.CheckboxGroup(list(CONDITIONS), label="Conditions")
                     medications = gr.CheckboxGroup(list(MEDICATIONS), label="Medications")
                     with gr.Row():
-                        dryweight = gr.Number(
-                            label="Dry weight (kg)", value=None,
-                            info="Turns the w= weights in the history into idwg_rel and "
-                                 "uf_rate. Without it those features are NaN.")
-                        first_dialysis = gr.Textbox(
-                            label="First dialysis (YYYY-MM-DD)", value="",
-                            info="What vintage_years is derived from.")
-                    with gr.Row():
                         missed_3d = gr.Slider(0, 3, value=0, step=1,
                                               label="Doses missed in the last 3 days")
                         adherence_7d = gr.Slider(0, 100, value=100, step=5,
@@ -599,22 +604,21 @@ def build_demo():
 
         # Several CheckboxGroups, one flat symptom list: merge at call time rather than
         # threading a nested structure through the callback signature.
-        def _assess(rt, pid, ag, sx, dm, pg, hf, pt, cond, med, pos, m3, a7, ch, dw, fd,
+        def _assess(rt, pid, ag, sx, dm, pg, hf, pt, cond, med, pos, m3, a7, ch,
                     *sym_groups):
             flat = [s for grp in sym_groups for s in (grp or [])]
-            return assess(rt, pid, ag, sx, dm, pg, hf, pt, cond, med, flat, pos, m3, a7, ch,
-                          dw, fd)
+            return assess(rt, pid, ag, sx, dm, pg, hf, pt, cond, med, flat, pos, m3, a7, ch)
 
         go.click(_assess,
                  inputs=[readings, patient_id, age, sex, diabetic, pregnant, hf_type,
                          provider_target, conditions, medications, position, missed_3d,
-                         adherence_7d, chained, dryweight, first_dialysis, *sym_boxes],
+                         adherence_7d, chained, *sym_boxes],
                  outputs=[banner, tiles, fc_tbl, chart, eng_tbl, sym_tbl, chain_tbl, cov_tbl,
                           raw])
         demo.load(_assess,
                   inputs=[readings, patient_id, age, sex, diabetic, pregnant, hf_type,
                           provider_target, conditions, medications, position, missed_3d,
-                          adherence_7d, chained, dryweight, first_dialysis, *sym_boxes],
+                          adherence_7d, chained, *sym_boxes],
                   outputs=[banner, tiles, fc_tbl, chart, eng_tbl, sym_tbl, chain_tbl, cov_tbl,
                            raw])
     return demo

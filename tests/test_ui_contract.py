@@ -57,6 +57,16 @@ def _ids_used(js):
             | set(re.findall(r'\bnum\("([a-z0-9-]+)"\)', js)))
 
 
+def _dyn_suffixes(js):
+    """Suffixes of ids assembled at runtime, e.g. `$(sig + "-chart")`.
+
+    One renderer serves both the systolic and the diastolic card, so their element ids never
+    appear as literals. Without this the reverse-direction note calls eighteen live ids dead
+    markup, and -- worse -- a renamed suffix would go unnoticed.
+    """
+    return set(re.findall(r'\$\(\s*\w+\s*\+\s*"-([a-z0-9-]+)"\s*\)', js))
+
+
 def _ids_declared(html):
     return set(re.findall(r'\bid="([a-zA-Z0-9_-]+)"', html))
 
@@ -71,9 +81,21 @@ def _ids():
     chk("    (control) a fabricated id is detected as missing",
         "totally-not-an-element" not in have)
 
+    # A runtime-assembled suffix must match SOMETHING in the markup, or the renderer is
+    # reaching for elements that do not exist and every card it owns silently stays blank.
+    dyn = _dyn_suffixes(APP_JS)
+    orphan = sorted(sfx for sfx in dyn
+                    if not any(h.endswith("-" + sfx) for h in have))
+    chk("*** every runtime-assembled element id resolves to real markup ***",
+        not orphan, f"no id ends with: {orphan}")
+    chk("    (control) the dynamic-suffix list was actually extracted",
+        {"chart", "card"} <= dyn, sorted(dyn))
+
     # The reverse direction is a warning, not a failure -- static markup may legitimately
     # carry ids the script never touches.
-    unused = sorted(have - used - {"form", "banner-title", "banner-detail", "readings-hint"})
+    unused = sorted(h for h in have - used
+                    if h not in {"form", "banner-title", "banner-detail", "readings-help"}
+                    and not any(h.endswith("-" + sfx) for sfx in dyn))
     if unused:
         print(f"  note   ids in the markup that app.js never reads: {unused}")
 
@@ -134,7 +156,7 @@ def _classes():
     chk("*** every class the scripts emit has a rule in style.css ***", not missing,
         f"unstyled: {missing}")
     chk("    (control) the emitted-class list was actually extracted",
-        {"tile", "pill", "banner", "chain-block"} <= emitted, sorted(emitted))
+        {"tile", "pill", "banner", "hero"} <= emitted, sorted(emitted))
     chk("    (control) an unstyled class would be caught",
         "no-such-class-anywhere" not in styled)
 
@@ -152,7 +174,7 @@ def _payload():
     body = {"patient_id": "ui-contract", "readings": rows,
             "profile": {"age": 68.0, "is_male": 1, "is_dm": 0, "is_pregnant": 0,
                         "hf_type": "NONE", "conditions": [], "medications": [],
-                        "missed_3d": 0, "adherence_7d": 1.0, "dryweight": 72.0},
+                        "missed_3d": 0, "adherence_7d": 1.0},
             "enrich": {"symptom_chained": True}}
     res = TestClient(A.app).post("/api/predict", json=body)
     chk("the API answers the dashboard's own request shape", res.status_code == 200,

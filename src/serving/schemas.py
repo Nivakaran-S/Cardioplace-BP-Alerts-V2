@@ -3,6 +3,14 @@
 Forbidding unknown fields is deliberate: a mistyped `symtoms` should be a 422 naming the
 field, not a silently ignored key that makes the engine evaluate a patient with no symptoms
 and return a reassuring answer.
+
+This is a blood-pressure product, and the field list says so. The forecaster was fitted on a
+haemodialysis corpus, so the training panel carried interdialytic weight gain, ultrafiltration
+volume and rate, session length, intradialytic pressure drop, dry weight and dialysis vintage.
+None of those are collected here: they are not things a cardiovascular BP service can ask for,
+and a field nobody can fill is worse than an absent one -- it implies the answer degrades for a
+reason the user could fix. They stay NaN, which the feature builder handles natively, and
+`feature_coverage` reports the cost rather than hiding it.
 """
 
 from typing import Literal
@@ -32,7 +40,6 @@ class Reading(_Base):
     dbp: int = Field(ge=_DBP_LO, le=_DBP_HI)
     pulse: float | None = Field(None, ge=20, le=250)
     weight: float | None = Field(None, ge=_W_LO, le=_W_HI)
-    idwg: float | None = Field(None, ge=-5, le=12)
     symptoms: list[str] = Field(default_factory=list)
 
     #: Did the patient take every prescribed medication on this day?
@@ -48,22 +55,6 @@ class Reading(_Base):
     #: field and the profile. Taking it from the client would let the two disagree.
     took_all_meds: bool | None = None
 
-    #: Intradialytic session measurements. Absent for anyone not on dialysis, and absent for
-    #: most dialysis patients too -- a journaling app does not see the machine. They stay None
-    #: rather than 0 because zero ultrafiltration is a clinically meaningful and wrong claim.
-    #: Supplying them resolves uf_lag1 / uf_per_kg / uf_rate_* and the sbp_drop history.
-    #:
-    #: Bounds are taken from the corpus these features were fitted on, not guessed. A first
-    #: pass used `session_hours >= 0.5` and `sbp_drop <= 120`, which rejected 0.33% and 0.12%
-    #: of real held-out sessions -- and a 422 on a genuine reading is worse than a wide bound,
-    #: because it drops the whole request rather than one field. Measured range over the
-    #: held-out split: session_hours [0, 13.67], uf_total [0, 3.0], sbp_drop [0, 139].
-    #: `uf_rate` guards `session_hours > 0` itself, so zero is accepted and simply derives
-    #: nothing.
-    uf_total: float | None = Field(None, ge=0, le=10, description="litres removed")
-    session_hours: float | None = Field(None, ge=0, le=24)
-    sbp_drop: float | None = Field(None, ge=-50, le=150,
-                                   description="pre- minus intradialytic-nadir systolic, mmHg")
     position: Literal["SITTING", "STANDING", "LYING"] = "SITTING"
     #: Confirmatory measurements. Load-bearing, not cosmetic: the engine gates every
     #: non-emergency rule behind n_meas >= 2, so a single unconfirmed reading is reported
@@ -104,31 +95,12 @@ class Profile(_Base):
     conditions: list[str] = Field(default_factory=list)
     medications: list[str] = Field(default_factory=list)
     provider_target: float | None = Field(None, ge=80, le=200)
-    #: Target post-dialysis weight, in kg. Optional, and absent for anyone not on dialysis.
-    #: Training derived `idwg_rel` and `uf_rate` from it, so without it those stay NaN --
-    #: which is the honest state, not a reason to substitute the measured weight. Bounds match
-    #: SCHEMA_RANGES["weight"].
-    dryweight: float | None = Field(None, ge=25, le=220)
-    #: Date the patient started dialysis. The model was fitted on `vintage_years`, derived
-    #: from it; without this the feature is NaN on every request. Time on dialysis is one of
-    #: the stronger static predictors of pressure instability, so it is worth the one field.
-    first_dialysis: str | None = None
     missed_3d: int = Field(0, ge=0, le=3)
     adherence_7d: float = Field(1.0, ge=0.0, le=1.0)
     #: Where this history sits in the patient's real timeline. Without it a returning
     #: patient who pastes their last 20 readings looks like a patient at step 0-19, and
     #: RULE_FIRST_MONTH_ADHERENCE_NUDGE (step < 30) fires for everyone.
     step_offset: int = Field(0, ge=0, le=100_000)
-
-    @field_validator("first_dialysis")
-    @classmethod
-    def _parse_first_dialysis(cls, v):
-        if v is None:
-            return v
-        ts = pd.to_datetime(v, errors="coerce")
-        if pd.isna(ts):
-            raise ValueError(f"unparseable first_dialysis date {v!r}; use YYYY-MM-DD")
-        return str(pd.Timestamp(ts).normalize().date())
 
     @field_validator("conditions")
     @classmethod

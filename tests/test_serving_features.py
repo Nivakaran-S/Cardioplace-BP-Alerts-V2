@@ -43,16 +43,13 @@ def chk(name, cond, extra=""):
         FAILS.append(name)
 
 
-def build_request(*, symptoms=True, pulse=True, dryweight=True, session=True,
+def build_request(*, symptoms=True, pulse=True, session=True,
                   clinical=True, vitals=True, n=60):
     rows, d = [], datetime.date(2026, 2, 2)
     for i in range(n):
         r = {"date": d.isoformat(), "sbp": 138 + (i % 7) * 3 - (i % 3), "dbp": 78 + i % 5}
         if vitals:
-            # idwg is submitted so the dry-weight-derived features have their other input;
-            # idwg_rel needs BOTH and would stay NaN on idwg alone.
-            r.update({"idwg": round(1.6 + (i % 5) * 0.3, 2),
-                      "weight": round(71.0 + (i % 5) * 0.3, 2)})
+            r["weight"] = round(71.0 + (i % 5) * 0.3, 2)
         if pulse:
             r["pulse"] = 68 + (i % 11)
         if symptoms and i % 4 == 0:
@@ -60,16 +57,12 @@ def build_request(*, symptoms=True, pulse=True, dryweight=True, session=True,
         if symptoms and i % 13 == 0:
             r["symptoms"] = ["syncope"]                     # a training red flag
         if session:
-            r.update({"took_all_meds": i % 4 != 0, "uf_total": round(2.1 + (i % 4) * 0.1, 2),
-                      "session_hours": 4.0, "sbp_drop": 14.0 + (i % 6)})
+            r["took_all_meds"] = i % 4 != 0
         rows.append(r)
         d += datetime.timedelta(days=2)
     prof = {"age": 68.0, "is_male": 1}
-    if dryweight:
-        prof["dryweight"] = 71.0
     if clinical:
-        prof.update({"conditions": ["has_hf", "has_cad"], "medications": ["on_ace", "on_bb"],
-                     "first_dialysis": "2019-03-01"})
+        prof.update({"conditions": ["has_hf", "has_cad"], "medications": ["on_ace", "on_bb"]})
     return PredictRequest(patient_id="feat-1", readings=rows, profile=prof)
 
 
@@ -86,10 +79,15 @@ SYMPTOM_FEATURES = ["sym_any_lag1", "sym_any_mean7", "sym_count_lag1", "sym_red_
                     "sym_shortness_of_breath_lag1", "sym_syncope_rate30"]
 HR_FEATURES = ["heart_rate_lag1", "heart_rate_mean7", "heart_rate_mean30",
                "shock_index_lag1", "hr_z", "hr_d1"]
-DRYWEIGHT_FEATURES = ["idwg_rel_lag1"]
+#: Dialysis-derived features the product no longer collects the inputs for. NaN by
+#: construction now, and asserted so: the distinction this file exists to keep is between
+#: "not submitted" and "submitted and dropped", and a deliberate product decision belongs in
+#: the first group with a reason attached.
+NOT_COLLECTED = ["idwg_rel_lag1", "idwg_lag1", "uf_rate_lag1", "uf_lag1", "vintage_years",
+                 "sbp_drop_lag1"]
 
 #: Genuinely unavailable at serving. Their absence is the documented shift, not a defect.
-HONESTLY_ABSENT = ["sbp_drop_lag1", "uf_total_lag1"]
+HONESTLY_ABSENT = ["uf_total_lag1"]
 
 
 def _submitted_features_arrive():
@@ -127,7 +125,7 @@ def _values_are_right():
 
 def _control_no_symptoms():
     """The checks must be able to fail: a request with no symptoms and no pulse."""
-    row = feature_row(build_request(symptoms=False, pulse=False, dryweight=False))
+    row = feature_row(build_request(symptoms=False, pulse=False))
     hr_nan = [c for c in HR_FEATURES
               if c in row.columns and not np.isfinite(row[c].iloc[0])]
     chk("(control) with no pulse submitted, the HR features ARE NaN",
@@ -152,19 +150,50 @@ def _honestly_absent_stay_absent():
             v is None or not np.isfinite(v), repr(v))
 
 
-def _dryweight():
-    with_dw = feature_row(build_request(dryweight=True))
-    without = feature_row(build_request(dryweight=False))
-    for c in DRYWEIGHT_FEATURES:
-        if c not in with_dw.columns:
-            print(f"  INFO    {c} not built on this config; skipping")
+def _not_collected():
+    """Dialysis features must be NaN because nothing collects them -- and stay unreachable.
+
+    This is the deliberate half of the file's distinction. `sbp_drop`, `idwg`, `uf_total`,
+    `session_hours`, dry weight and the first-dialysis date were accepted until this became a
+    blood-pressure product; now the schema forbids them. Both halves are asserted, because a
+    field that is quietly re-accepted would populate features the forecaster was fitted on and
+    change every number here without anything looking wrong.
+    """
+    from pydantic import ValidationError
+
+    row = feature_row(build_request())
+    for c in NOT_COLLECTED:
+        if c not in row.columns:
+            chk(f"{c} is not fabricated", True)
             continue
-        a = with_dw[c].iloc[0]
-        b = without[c].iloc[0] if c in without.columns else np.nan
-        chk(f"{c} is populated when dry weight is supplied",
-            a is not None and np.isfinite(a), repr(a))
-        chk("    and NaN when it is not (the check can fail)",
-            b is None or not np.isfinite(b), repr(b))
+        v = row[c].iloc[0]
+        chk(f"{c} is NaN -- this product does not collect its input",
+            v is None or not np.isfinite(v), repr(v))
+
+    # The schema is the enforcement point, so prove it rejects rather than ignores.
+    base = {"date": "2026-01-01", "sbp": 140, "dbp": 80}
+    for field, val in (("idwg", 2.1), ("uf_total", 2.4), ("session_hours", 4.0),
+                       ("sbp_drop", 18.0)):
+        try:
+            PredictRequest(patient_id="x", readings=[{**base, field: val}])
+            chk(f"the schema rejects a withdrawn reading field {field!r}", False,
+                "accepted it -- extra=forbid is not doing its job")
+        except ValidationError:
+            chk(f"the schema rejects a withdrawn reading field {field!r}", True)
+    for field, val in (("dryweight", 71.0), ("first_dialysis", "2019-03-01")):
+        try:
+            PredictRequest(patient_id="x", readings=[base], profile={field: val})
+            chk(f"the schema rejects a withdrawn profile field {field!r}", False, "accepted")
+        except ValidationError:
+            chk(f"the schema rejects a withdrawn profile field {field!r}", True)
+
+    # ...and the control: a field the product DOES collect must still be accepted, or the
+    # checks above would pass on a schema that rejects everything.
+    try:
+        PredictRequest(patient_id="x", readings=[{**base, "weight": 71.0}])
+        chk("    (control) a collected field is still accepted", True)
+    except ValidationError as exc:
+        chk("    (control) a collected field is still accepted", False, str(exc)[:120])
 
 
 def _shared_row():
@@ -223,7 +252,7 @@ def _coverage():
              if not c.startswith("y_") and pd.api.types.is_numeric_dtype(row[c])]
     finite = [c for c in built if np.isfinite(row[c].iloc[0])]
     print(f"  INFO    {len(finite)} of {len(built)} numeric columns are finite for a request "
-          f"carrying symptoms, pulse, idwg, weight and dry weight")
+          f"carrying symptoms, pulse, weight and same-day adherence")
     empty = sorted(set(built) - set(finite))
     print(f"  INFO    still NaN ({len(empty)}): {empty[:12]}"
           + (" ..." if len(empty) > 12 else ""))
@@ -250,12 +279,20 @@ def _bundle_coverage():
         return [c for c in feats if not np.isfinite(row[c].iloc[0])]
 
     full = missing(build_request())
-    chk("*** a complete request resolves every fitted feature ***",
-        not full, f"{len(full)} still NaN: {sorted(full)[:10]}")
+    # Sorted into the two groups the API itself reports, so this test and the coverage block
+    # cannot disagree about which absences are the caller's to fix.
+    from src.serving.enrich import _NOT_COLLECTED, _stem
+    product = [c for c in full if _stem(c) in _NOT_COLLECTED]
+    fixable = [c for c in full if _stem(c) not in _NOT_COLLECTED]
+    chk("*** a complete request resolves every feature this product can supply ***",
+        not fixable, f"{len(fixable)} still NaN: {sorted(fixable)[:10]}")
+    chk("    the rest are dialysis measurements, absent by product decision",
+        len(product) == len(full) and len(product) > 20,
+        f"{len(product)} of {len(full)}")
 
     # The control is the whole point: if the bare request ALSO resolved everything, the check
     # above would be passing for free and telling us nothing about the mapping.
-    bare = missing(build_request(symptoms=False, pulse=False, dryweight=False,
+    bare = missing(build_request(symptoms=False, pulse=False,
                                  session=False, clinical=False, vitals=False))
     chk("    (control) a bare request leaves many unresolved",
         len(bare) > 40, f"only {len(bare)} NaN -- the completeness check may be vacuous")
@@ -264,27 +301,30 @@ def _bundle_coverage():
 
     # Each input group must be individually load-bearing, or the API is asking for a field
     # that changes nothing.
-    for label, kw in (("per-session weight and adherence", {"session": False}),
-                      ("conditions, medications and vintage", {"clinical": False}),
-                      ("dry weight", {"dryweight": False}),
+    for label, kw in (("per-session adherence", {"session": False}),
                       ("pulse", {"pulse": False}),
-                      ("per-reading weight and idwg", {"vitals": False})):
+                      ("per-reading weight", {"vitals": False})):
         got = missing(build_request(**kw))
         chk(f"    withholding {label} costs features", len(got) > len(full),
             f"{len(got)} vs {len(full)}")
 
-    # Symptoms are the exception, and the difference matters: they are emitted as 0/1 for
-    # every reading, so withholding them changes the VALUES rather than the NaN count. A
-    # not-reported symptom is information. Asserted on the values for that reason.
-    with_s = feature_row(build_request()).reindex(columns=feats).iloc[0]
-    without_s = feature_row(build_request(symptoms=False)).reindex(columns=feats).iloc[0]
-    sym_cols = [c for c in feats if c.startswith("sym_")]
-    moved = [c for c in sym_cols if with_s[c] != without_s[c]]
-    chk("    withholding symptoms changes the symptom features (0/1, never NaN)",
-        len(moved) >= 5, f"{len(moved)} of {len(sym_cols)} moved")
-    chk("    and they stay finite either way -- not-reported is 0, not missing",
-        all(np.isfinite(without_s[c]) for c in sym_cols),
-        [c for c in sym_cols if not np.isfinite(without_s[c])][:5])
+    # Symptoms and the clinical flags are the exception, and the difference matters: both are
+    # emitted as 0/1 for every reading, so withholding them changes the VALUES rather than the
+    # NaN count. An unticked condition means "does not have it", which is information, not
+    # missingness. Counting NaN here would ask the wrong question and pass only if the
+    # mapping were broken.
+    full_row = feature_row(build_request()).reindex(columns=feats).iloc[0]
+    for label, kw, prefix in (
+            ("symptoms", {"symptoms": False}, ("sym_",)),
+            ("conditions and medications", {"clinical": False}, ("has_", "on_"))):
+        other = feature_row(build_request(**kw)).reindex(columns=feats).iloc[0]
+        cols = [c for c in feats if c.startswith(prefix)]
+        moved = [c for c in cols if full_row[c] != other[c]]
+        chk(f"    withholding {label} changes their features (0/1, never NaN)",
+            len(moved) >= 3, f"{len(moved)} of {len(cols)} moved")
+        chk("    and they stay finite either way -- not-reported is 0, not missing",
+            all(np.isfinite(other[c]) for c in cols),
+            [c for c in cols if not np.isfinite(other[c])][:5])
 
 
 def run():
@@ -292,7 +332,7 @@ def run():
                       ("values are correct", _values_are_right),
                       ("control: nothing submitted", _control_no_symptoms),
                       ("honestly absent stay absent", _honestly_absent_stay_absent),
-                      ("dry weight", _dryweight),
+                      ("deliberately not collected", _not_collected),
                       ("shared feature row", _shared_row),
                       ("coverage", _coverage),
                       ("bundle coverage", _bundle_coverage)):

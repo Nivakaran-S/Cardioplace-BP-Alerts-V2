@@ -330,6 +330,54 @@ code { font-family: var(--mono); font-size: .92em; background: var(--surface-sun
 
 .dim { color: var(--ink-muted); font-weight: 400; }
 
+
+/* ------------------------------------------------- headline + confidence */
+
+/* Each forecast card leads with one number. The hero is the answer; the chips under the
+   chart are what is known about how much to trust it, stated from evidence that exists
+   rather than asserted. */
+.headline { margin: 2px 0 12px; }
+.hero { display: flex; align-items: baseline; gap: 6px; }
+.hero .hv { font-size: 40px; font-weight: 650; letter-spacing: -.03em; line-height: 1; }
+.hero .hu { font-size: 15px; font-weight: 500; color: var(--ink-muted); }
+.hsub { margin-top: 5px; font-size: 13px; color: var(--ink-2); }
+
+.conf { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 2px; }
+.stat {
+  display: inline-flex; align-items: baseline; gap: 6px;
+  padding: 5px 11px; border-radius: 999px;
+  background: var(--surface-sunken); border: 1px solid var(--hairline);
+}
+.stat .sk { font-size: 11.5px; color: var(--ink-muted); }
+.stat .sv { font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; }
+
+/* --------------------------------------------------------- segmented control */
+
+.seg { display: inline-flex; gap: 2px; padding: 3px; margin-bottom: 12px;
+       background: var(--surface-sunken); border: 1px solid var(--hairline);
+       border-radius: 10px; flex-wrap: wrap; }
+.seg-btn {
+  padding: 6px 12px; border: 0; border-radius: 7px; background: transparent;
+  font: inherit; font-size: 13px; color: var(--ink-2); cursor: pointer;
+}
+.seg-btn:hover { color: var(--ink); }
+.seg-btn.on { background: var(--surface); color: var(--ink); font-weight: 600;
+              box-shadow: 0 1px 2px rgba(0,0,0,.08); }
+
+/* ----------------------------------------------- probability + its interval */
+
+/* The dot is the point estimate, the lighter span behind it the Venn-Abers interval. Both
+   share one axis so a wide interval reads as wide -- which is the whole reason for showing
+   the pair instead of the point alone. */
+.pbar { position: relative; display: block; height: 8px; min-width: 110px;
+        border-radius: 999px; background: var(--surface-sunken); overflow: hidden; }
+.pbar .band { position: absolute; top: 0; bottom: 0; border-radius: 999px;
+              background: color-mix(in srgb, var(--series-1) 34%, transparent); }
+.pbar .pt { position: absolute; top: -1px; width: 3px; height: 10px; border-radius: 2px;
+            background: var(--series-1); }
+
+th.rowh { text-transform: none; font-size: 13.5px; color: var(--ink); font-weight: 550; }
+
 /* ------------------------------------------------------------------- meter */
 
 .meter { display: grid; gap: 6px; }
