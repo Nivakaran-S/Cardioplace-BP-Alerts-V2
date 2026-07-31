@@ -211,6 +211,27 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+
+      # actions/checkout does NOT fetch LFS objects, so the working tree holds 133-byte
+      # pointer files. Uploading a pointer to a Space is rejected with "an LFS pointer
+      # pointed to a file that does not exist", which reads like a corrupt push and is
+      # actually just a missing fetch.
+      #
+      # `lfs: true` on the checkout above would fix it and also drag down the 274 MB corpus,
+      # which is excluded from the upload anyway. Pulling one include pattern fetches the
+      # 88 MB bundle and nothing else. `--exclude=""` overrides the repo's default excludes,
+      # which would otherwise skip it right back out.
+      - name: Fetch the serving bundle from LFS
+        run: |
+          git lfs pull --include="final_model/*" --exclude=""
+          # Fail HERE with a clear message rather than 40 seconds later inside `hf upload`
+          # with a message about a corrupt pointer.
+          if head -c 40 final_model/model.pkl | grep -q "git-lfs.github.com"; then
+            echo "::error::final_model/model.pkl is still an LFS pointer after git lfs pull"
+            exit 1
+          fi
+          echo "serving bundle materialised: $(du -h final_model/model.pkl | cut -f1)"
+
       - name: Push to the Space
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
@@ -226,9 +247,10 @@ jobs:
           # after one flag makes the rest positional and `hf upload` rejects them as
           # unexpected extra arguments.
           #
-          # data/ is excluded because the Space serves the model, not the corpus -- and the
-          # checkout holds LFS pointers anyway, since actions/checkout does not fetch LFS
-          # by default. Artifacts/, logs/ and mlruns/ are run outputs.
+          # data/ is excluded because the Space serves the model, not the corpus, and its
+          # LFS objects are deliberately never fetched above. Artifacts/, logs/ and mlruns/
+          # are run outputs. final_model/ is NOT excluded -- it is the point of the deploy,
+          # and the step above makes sure it is a real file rather than a pointer.
           hf upload "$HF_SPACE" . . --repo-type=space \
             --commit-message "Deploy ${GITHUB_SHA::7} from ${GITHUB_REF_NAME}" \
             --exclude "data/*" \
