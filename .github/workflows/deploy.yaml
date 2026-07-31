@@ -35,6 +35,10 @@ on:
 
 env:
   PYTHONIOENCODING: utf-8
+  # CI fetches the LFS object, so a missing bundle here is a broken checkout rather than a
+  # developer who has not trained yet. This turns the suites' "no model, skipping" path into a
+  # failure, so an LFS regression cannot leave the run green with half its checks skipped.
+  CP_REQUIRE_MODEL: "1"
 
 jobs:
   verify:
@@ -45,6 +49,25 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
+
+      # The deploy job below fetches the LFS object because a pointer cannot be uploaded to
+      # the Space. This job needs it for a different and less obvious reason: `load_object`
+      # on a 133-byte pointer raises `KeyError: 118` -- 118 is `v`, the first byte of
+      # "version https://git-lfs.github.com/spec/v1", because CPython's unpickler indexes its
+      # opcode dispatch table by the byte it read. The registry catches that, keeps
+      # `predictor = None`, and every model-dependent test then measures the DEGRADED path
+      # while appearing to measure the real one.
+      #
+      # Targeted rather than `lfs: true` on the checkout, which would also drag down the
+      # 274 MB corpus this job never touches.
+      - name: Fetch the serving bundle from LFS
+        run: |
+          git lfs pull --include="final_model/*" --exclude=""
+          if head -c 40 final_model/model.pkl | grep -q "git-lfs.github.com"; then
+            echo "::error::final_model/model.pkl is still an LFS pointer after git lfs pull"
+            exit 1
+          fi
+          python -c "import os; print(f'model.pkl {os.path.getsize(\"final_model/model.pkl\")/1e6:.1f} MB')"
 
       - name: Install
         run: |

@@ -172,10 +172,50 @@ def _payload():
                 return False
         return True
 
+    # Half this file's checks need a loaded bundle, and when there is none they ALL fail at
+    # once -- which reads like the payload is broken when the real message is one line long.
+    # CI hit exactly that: `load_object` on an unfetched LFS pointer raises `KeyError: 118`
+    # (118 is `v`, the first byte of "version https://git-lfs.github.com/..."), the registry
+    # kept `predictor = None`, and the run reported thirty-eight missing keys.
+    #
+    # So the model's absence is now ONE named check, and the model-dependent block is skipped
+    # rather than allowed to fail forty times. Strictness is the caller's decision:
+    # CP_REQUIRE_MODEL=1 (set in CI) turns the skip into a failure, so a silent regression in
+    # the LFS fetch cannot leave this suite green.
+    import os
+
+    health = A.REGISTRY.health()
+    has_model = bool(health.get("model_loaded"))
+    require = os.environ.get("CP_REQUIRE_MODEL", "").strip() not in ("", "0", "false")
+    if not has_model:
+        detail = health.get("detail") or "no detail reported"
+        if require:
+            chk("*** a bundle is loaded (CP_REQUIRE_MODEL is set) ***", False,
+                f"{detail} -- if this says KeyError: 118, the checkout did not fetch the "
+                f"LFS object and final_model/model.pkl is still a pointer file")
+        else:
+            print(f"  SKIP   no bundle loaded ({detail}); skipping every model-dependent "
+                  f"payload check. Set CP_REQUIRE_MODEL=1 to make this a failure.")
+
+    # Keys the degraded path emits too -- checked whether or not a bundle is present, because
+    # the rule engine is the safety-critical layer and does not need a model.
+    ALWAYS = [
+        "confidence_tier", "n_observations", "rule_engine.history.ts", "rule_engine.fired_count",
+        "governance.emergency_floor_mmHg", "governance.population_threshold_mmHg",
+    ]
+    missing_always = [k for k in ALWAYS if not at(k)]
+    chk("*** every key the renderers read on the degraded path is present ***",
+        not missing_always, f"absent: {missing_always}")
+
+    if not has_model:
+        chk("    (control) a key the API does not emit is reported missing",
+            not at("forecast.sbp.h0.definitely_not_a_field"))
+        return
+
     # Every key a renderer indexes. Absent ones do not crash -- they render an em-dash or hide
     # a section, which is exactly why they need asserting.
     REQUIRED = [
-        "confidence_tier", "model_version", "n_observations",
+        "model_version",
         "forecast.sbp.h0.point", "forecast.sbp.h0.days_ahead_est",
         "forecast.sbp.h0.coherence.ok", "forecast.dbp.h0.point",
         "personalisation.threshold", "personalisation.offset", "personalisation.cohort_key",
@@ -184,13 +224,12 @@ def _payload():
         "anomaly.points.ts", "anomaly.points.score", "anomaly.points.flagged",
         "anomaly.cut", "anomaly.n_flagged", "anomaly.n_settled",
         "rule_engine.current.is_emergency", "rule_engine.current.fired",
-        "rule_engine.current.rule_id", "rule_engine.history.ts", "rule_engine.history.tier",
-        "rule_engine.fired_count",
+        "rule_engine.current.rule_id",
         "predicted_alert.horizons.days_ahead", "predicted_alert.horizons.sbp",
         "predicted_alert.horizons.fired", "predicted_alert.horizons.is_emergency",
         "backtest.horizons.mae", "backtest.horizons.within_10", "backtest.horizons.n",
-        "backtest.series.h1", "history.ts", "history.sbp", "history.dbp",
-        "governance.emergency_floor_mmHg", "governance.population_threshold_mmHg",
+        "backtest.series.h1",
+        "history.ts", "history.sbp", "history.dbp",
         "symptom_chained.available", "symptom_chained.items", "symptom_chained.sessions_ahead",
         "symptom_chained.items.prob", "symptom_chained.items.sessions_ahead",
         "symptom_chained.items.mechanism", "symptom_chained.items.jensen_gap",
