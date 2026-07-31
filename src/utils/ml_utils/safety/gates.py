@@ -25,6 +25,7 @@ import sys
 import numpy as np
 import pandas as pd
 
+from src.constants.training_pipeline import SAFETY_GATES_BLOCK_PROMOTION
 from src.exception.custom_exception import CustomException
 from src.logging.logger import logging
 from src.utils.ml_utils.rule_engine.registry import EMERGENCY_TIERS
@@ -54,7 +55,19 @@ class GateResult:
         return [r["gate"] for r in self.rows if r["status"] == WARN]
 
     @property
+    def enforced(self) -> bool:
+        """Whether a critical failure actually blocks. See SAFETY_GATES_BLOCK_PROMOTION."""
+        return bool(SAFETY_GATES_BLOCK_PROMOTION)
+
+    @property
     def promotable(self) -> bool:
+        """True when nothing critical failed -- or unconditionally when gates are not enforced.
+
+        `critical_failures` is deliberately left honest either way, so the report and the log
+        still say what failed. Only the consequence changes.
+        """
+        if not SAFETY_GATES_BLOCK_PROMOTION:
+            return True
         return not self.critical_failures
 
     def __repr__(self) -> str:
