@@ -174,10 +174,11 @@ def _equivalence():
             "profile": {"age": 68.0, "is_male": 1, "is_dm": 0, "is_pregnant": 0,
                         "hf_type": "NONE", "conditions": [], "medications": [],
                         "missed_3d": 0, "adherence_7d": 1.0},
-            # The Space opts into the chained block, so the API request must too -- otherwise
-            # this compares two different questions and reports the difference as drift. The
-            # test caught exactly that when the Space started requesting it.
-            "enrich": {"symptom_chained": True}}
+            # The enrich flags must match whatever the Space sends, or this compares two
+            # different questions and reports the difference as drift. It has now caught that
+            # twice: once when the Space started requesting the chained block, and again when
+            # the block was made opt-in and the Space stopped. Mirrors the Space's default.
+            "enrich": {"symptom_chained": False}}
     api = TestClient(A.app).post("/api/predict", json=body).json()
     *_, space = call()
 
@@ -185,7 +186,8 @@ def _equivalence():
     # inside predict() and belongs with `timings` rather than with the advisory's content.
     drop = {"timings", "budget", "latency_ms"}
     a = {k: v for k, v in api.items() if k not in drop}
-    s = {k: v for k, v in space.items() if k not in drop}
+    s_ = {k: v for k, v in space.items() if k not in drop}
+    s = s_
     same = json.dumps(a, sort_keys=True, default=str) == json.dumps(s, sort_keys=True,
                                                                     default=str)
     if not same:
@@ -197,6 +199,8 @@ def _equivalence():
         chk("*** Space and API return the identical advisory ***", True)
 
     # Guard against the above passing because both sides are empty.
+    chk("    the chained block is OFF by default on both sides (it costs ~5 s)",
+        "symptom_chained" not in a and "symptom_chained" not in s_)
     chk("    the compared advisory is non-trivial",
         bool(a.get("rule_engine")) and len(a) > 6, sorted(a))
 

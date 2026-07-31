@@ -290,7 +290,8 @@ def symptom_frame(d: dict) -> pd.DataFrame:
 # --------------------------------------------------------------------------- callback
 
 def assess(readings_text, patient_id, age, sex, diabetic, pregnant, hf_type, provider_target,
-           conditions, medications, symptoms, position, missed_3d, adherence_7d):
+           conditions, medications, symptoms, position, missed_3d, adherence_7d,
+           chained=False):
     empty = pd.DataFrame()
     try:
         rows = parse_readings(readings_text)
@@ -334,7 +335,7 @@ def assess(readings_text, patient_id, age, sex, diabetic, pregnant, hf_type, pro
     try:
         req = PredictRequest(patient_id=patient_id or "space-user", readings=rows,
                              profile=profile,
-                             enrich={"symptom_chained": True})
+                             enrich={"symptom_chained": bool(chained)})
     except ValidationError as exc:
         first = exc.errors()[0]
         loc = ".".join(str(x) for x in first.get("loc", []))
@@ -466,6 +467,10 @@ def build_demo():
                             [f"{s['label']}{' ⚑' if s['red_flag'] else ''}" for s in items],
                             label=group))
 
+                chained = gr.Checkbox(
+                    False, label="Also predict symptoms from the forecast",
+                    info="Rebuilds the feature frame per horizon and per quadrature node. "
+                         "Measured at ~5 s on a 60-reading history, so it is off by default.")
                 go = gr.Button("Assess", variant="primary", size="lg")
 
             # ------------------------------------------------------------- outputs
@@ -495,19 +500,20 @@ def build_demo():
 
         # Several CheckboxGroups, one flat symptom list: merge at call time rather than
         # threading a nested structure through the callback signature.
-        def _assess(rt, pid, ag, sx, dm, pg, hf, pt, cond, med, pos, m3, a7, *sym_groups):
+        def _assess(rt, pid, ag, sx, dm, pg, hf, pt, cond, med, pos, m3, a7, ch,
+                    *sym_groups):
             flat = [s for grp in sym_groups for s in (grp or [])]
-            return assess(rt, pid, ag, sx, dm, pg, hf, pt, cond, med, flat, pos, m3, a7)
+            return assess(rt, pid, ag, sx, dm, pg, hf, pt, cond, med, flat, pos, m3, a7, ch)
 
         go.click(_assess,
                  inputs=[readings, patient_id, age, sex, diabetic, pregnant, hf_type,
                          provider_target, conditions, medications, position, missed_3d,
-                         adherence_7d, *sym_boxes],
+                         adherence_7d, chained, *sym_boxes],
                  outputs=[banner, tiles, fc_tbl, chart, eng_tbl, sym_tbl, chain_tbl, raw])
         demo.load(_assess,
                   inputs=[readings, patient_id, age, sex, diabetic, pregnant, hf_type,
                           provider_target, conditions, medications, position, missed_3d,
-                          adherence_7d, *sym_boxes],
+                          adherence_7d, chained, *sym_boxes],
                   outputs=[banner, tiles, fc_tbl, chart, eng_tbl, sym_tbl, chain_tbl, raw])
     return demo
 

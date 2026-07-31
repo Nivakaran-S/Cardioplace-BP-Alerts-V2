@@ -664,9 +664,12 @@
         step_offset: Number($("step-offset").value) || 0
       },
       readings: rows,
-      // Opt in explicitly. It defaults off in EnrichFlags because it costs a feature build
-      // and ~15 head calls per session, and a caller that will not render it should not pay.
-      enrich: { symptom_chained: true }
+      // Off unless the user ticks the box. Measured on a 60-reading history this block is
+      // 5.0 s of a 7.1 s request -- 70% of it -- because it rebuilds the causal feature
+      // frame once per horizon and again per quadrature node. EnrichFlags defaults it off
+      // for exactly that reason, and requesting it unconditionally here overrode that
+      // decision and made every page load pay for a panel most users are not reading.
+      enrich: { symptom_chained: $("opt-chain") ? $("opt-chain").checked : false }
     };
 
     var btn = $("btn-predict"), results = document.querySelector(".results");
