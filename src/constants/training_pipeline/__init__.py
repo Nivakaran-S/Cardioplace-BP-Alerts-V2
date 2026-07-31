@@ -316,26 +316,6 @@ untouched, so these bounds decide what reaches production. Governance values abo
 inputs; these are the tolerances on the evidence that the governance held.
 """
 
-# Whether a failing critical gate BLOCKS promotion. Turned off by instruction on
-# 2026-07-31: every gate is still evaluated and still written to safety_gates.csv, but none
-# of them stops final_model/model.pkl being written.
-#
-# What that gives up, recorded once so it is not a surprise later. These are the eight that
-# were critical, all of which were PASSING when this was switched off -- only the fairness
-# gate had ever blocked, and it was removed separately:
-#
-#   * a personalised threshold at or above the 180 mmHg emergency floor
-#   * an offset outside the [-25, +15] governance caps
-#   * the detector exceeding its 5% staffing budget
-#   * personalisation causing an SBP >= 180 reading to STOP firing an emergency
-#   * an all-zero explanation, which is how a broken feature pipeline presents
-#   * test rows sitting outside the training distribution
-#   * the learned offset reaching the emergency floor
-#
-# Setting this back to True restores all of it; nothing was deleted. The run still logs the
-# verdict either way, so a blocked-but-promoted run is visible in the log rather than silent.
-SAFETY_GATES_BLOCK_PROMOTION: bool = False
-
 # Share of test rows allowed to sit outside the training distribution before the model is
 # judged to be answering questions it was never fitted for.
 OOD_RATE_MAX: float = 0.20

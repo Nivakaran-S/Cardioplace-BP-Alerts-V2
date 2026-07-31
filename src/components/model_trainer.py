@@ -975,19 +975,9 @@ class ModelTrainer:
             final_path = os.path.join(config.final_model_dir, "model.pkl")
             if gates.promotable:
                 save_object(final_path, predictor)
-                if gates.critical_failures:
-                    # Promoted DESPITE failures, because enforcement is off. This must be
-                    # loud: a reader who sees only "promoted" would reasonably assume the
-                    # gates passed, and here they did not.
-                    logging.error(
-                        "PROMOTED WITHOUT ENFORCEMENT: %d critical gate(s) FAILED and were "
-                        "not enforced (%s). SAFETY_GATES_BLOCK_PROMOTION is off. Wrote %s.",
-                        len(gates.critical_failures),
-                        ", ".join(gates.critical_failures), final_path)
-                else:
-                    logging.info("promoted to %s (%d/%d gates pass, 0 critical failures)",
-                                 final_path, gate_artifact.gates_passed,
-                                 gate_artifact.gates_total)
+                logging.info("promoted to %s (%d/%d gates pass, 0 critical failures)",
+                             final_path, gate_artifact.gates_passed,
+                             gate_artifact.gates_total)
             else:
                 logging.error("PROMOTION BLOCKED: %d critical safety-gate failures -- %s "
                               "left untouched, the run's own artifact is at %s",

@@ -97,15 +97,10 @@ def test_safety_gates():
     # quietly reinstates or fully deletes it has to come past this line.
     assert "subgroup parity" not in set(good.frame().gate), \
         "subgroup parity should no longer appear as a gate"
-    assert good.promotable, "a clean run must be promotable"
+    assert good.promotable, "removing the fairness gate must not have broken promotability"
     print("\n  subgroup parity: removed as a gate by instruction; fairness.csv still written")
 
-    # SAFETY_GATES_BLOCK_PROMOTION was turned off by instruction on 2026-07-31, so
-    # `promotable` is now unconditionally True. What is asserted below is that the gates
-    # still DETECT their failures. Detection and enforcement are separate properties and
-    # only the second was switched off; a gate that quietly stopped detecting would be an
-    # invisible regression, and this still catches it.
-    print("\n--- each critical gate must still DETECT its failure ---")
+    print("\n--- each critical gate must be able to FAIL ---")
     cases = {
         "emergency floor": dict(OFF=OFF.assign(threshold=OFF.threshold.where(
             OFF.index != 0, 185.0))),
@@ -120,13 +115,8 @@ def test_safety_gates():
     }
     for name, override in cases.items():
         r = run_safety_gates(**{**kw, **override})
-        assert r.critical_failures, f"{name}: gate did not detect the failure"
-        blocked = "BLOCKED" if not r.promotable else "detected, NOT enforced"
-        print(f"  {name:24s} -> {blocked} ({r.critical_failures})")
-    from src.utils.ml_utils.safety.gates import SAFETY_GATES_BLOCK_PROMOTION
-    print(f"\n  enforcement: SAFETY_GATES_BLOCK_PROMOTION = "
-          f"{SAFETY_GATES_BLOCK_PROMOTION} -- a critical failure is detected and reported "
-          f"but does NOT block promotion")
+        assert not r.promotable, f"{name}: gate did not bite"
+        print(f"  {name:24s} -> BLOCKED ({r.critical_failures})")
 
     print("\n--- a deliberate BASELINE ship is not a freeze failure ---")
     # ship_decision can rule that no learned model earned its place, and then a baseline
