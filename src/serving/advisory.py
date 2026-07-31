@@ -18,6 +18,7 @@ from src.serving.enrich import (
     anomaly_block,
     backtest_block,
     build_panel_frame,
+    feature_coverage_block,
     history_echo,
     predicted_alert_block,
     rule_engine_block,
@@ -100,6 +101,13 @@ def build_advisory(req, predictor, rules, blocked_note: str = "",
                 t0 = time.perf_counter()
                 out["backtest"] = backtest_block(predictor, F)
                 T.mark("backtest", t0)
+            if F is not None and req.enrich.feature_coverage:
+                # Reuses the frame above -- no build of its own, so this is a reindex and a
+                # null count. Reported whenever the frame exists, because a caller cannot
+                # otherwise tell a forecast made from 175 features from one made from 110.
+                t0 = time.perf_counter()
+                out["feature_coverage"] = feature_coverage_block(predictor, F)
+                T.mark("coverage", t0)
         if req.enrich.symptom_risk:
             t0 = time.perf_counter()
             out["symptom_risk"] = symptom_block(predictor, history, as_of,

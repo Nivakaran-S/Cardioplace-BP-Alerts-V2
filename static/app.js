@@ -1,797 +1,918 @@
-/* Cardioplace BP Alerts -- dashboard controller.
+/* Cardioplace BP Alerts — dashboard controller.
  *
- * Vanilla, no framework, no build step. One IIFE, sections in load order:
- * state -> theme -> form -> renderers -> network -> boot.
+ * One IIFE, no build step, no dependencies. Every renderer is pure and null-defensive: the
+ * API returns a deliberately open payload where blocks are absent rather than empty (no
+ * forecast on a cold start, no interval at most horizons, no detector before warm-up), so a
+ * renderer that assumes its block exists takes the whole page down with it. `paint` runs each
+ * section in its own try, for the same reason.
  *
- * Every renderer is pure `(data) -> void` and defensive against null, because `paint` calls
- * them inside individual try blocks: one malformed block must degrade to an empty panel, not
- * a blank page. On a clinical dashboard a section that fails silently is bad; a section that
- * takes the emergency banner down with it is much worse.
+ * Colours come from CSS custom properties, never literals. That is also why the theme toggle
+ * REDRAWS the charts rather than restyling them: an SVG attribute resolved at creation time
+ * does not follow a variable that changed afterwards.
  */
 (function () {
   "use strict";
-  var C = window.Charts;
-  var $ = function (id) { return document.getElementById(id); };
-  var LAST = null, SCHEMA = null, GOV = null;
 
+  var C = window.Charts;
+  var LAST = null;               // last payload, so the theme toggle can redraw from it
+  var VOCAB = null;
+
+  function $(id) { return document.getElementById(id); }
   function esc(s) {
-    return String(s === null || s === undefined ? "" : s)
-      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;");
-  }
-  function pretty(s) {
-    if (!s) return "";
-    return String(s).replace(/^RULE_/, "").replace(/_/g, " ").toLowerCase()
-      .replace(/^./, function (c) { return c.toUpperCase(); });
+    return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
   }
   function fmt(v, d) {
-    return (v === null || v === undefined || !isFinite(v)) ? "–" : Number(v).toFixed(d || 1);
+    if (v === null || v === undefined || !isFinite(v)) return "–";
+    return Number(v).toFixed(d === undefined ? 0 : d);
+  }
+  function pretty(s) {
+    if (!s) return "–";
+    var t = String(s).replace(/^RULE_/, "").replace(/_/g, " ").toLowerCase();
+    return t.charAt(0).toUpperCase() + t.slice(1);
   }
 
-  /* ------------------------------------------------------------------ theme */
+  /* Tier codes are engine identifiers, not prose. Sentence-casing `BP_LEVEL_1_HIGH` yields
+   * "Bp level 1 high", which reads like a bug; these are the clinician-facing names. Anything
+   * not listed falls back to `pretty` rather than rendering blank, so a tier added to the
+   * engine still shows something legible. */
+  var TIER_LABEL = {
+    BP_LEVEL_1_HIGH: "Stage 1 high", BP_LEVEL_1_LOW: "Stage 1 low",
+    BP_LEVEL_2: "Stage 2 high", BP_LEVEL_2_SYMPTOM_OVERRIDE: "Stage 2, symptom override",
+    EMERGENCY: "Emergency", HYPOTENSIVE: "Hypotensive", ELDERLY_LOW: "Low, elderly",
+    NARROW_PP: "Narrow pulse pressure", WIDE_PP: "Wide pulse pressure",
+    CONTRAINDICATION: "Contraindication", AFIB_RVR: "AF with rapid rate"
+  };
+  function tierName(t) {
+    if (!t) return "Clear";
+    return TIER_LABEL[t] || pretty(t);
+  }
+  /* Anything at or above stage 2 is red; a stage-1 breach is amber. Driven by the tier code,
+   * not by a substring match on its label. */
+  function tierKind(t, isEmergency) {
+    if (isEmergency || t === "EMERGENCY") return "critical";
+    if (!t) return "muted";
+    return /BP_LEVEL_2|ANGIO|CONTRAINDICATION/.test(t) ? "critical" : "warning";
+  }
+  function shortDate(iso) {
+    var d = new Date(iso);
+    return isNaN(d) ? String(iso)
+      : d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  }
+  function clear(el) { while (el && el.firstChild) el.removeChild(el.firstChild); }
+
+  var ICON = {
+    critical: '<path d="M12 3 1.7 21h20.6z"/><path d="M12 10v4M12 17.5h.01" stroke-width="2"/>',
+    watch:    '<circle cx="12" cy="12" r="9"/><path d="M12 7v6M12 16.5h.01"/>',
+    good:     '<circle cx="12" cy="12" r="9"/><path d="m8 12.5 2.6 2.6L16 9.5"/>',
+    info:     '<circle cx="12" cy="12" r="9"/><path d="M12 8h.01M11 12h1v4h1"/>'
+  };
+  function glyph(kind) {
+    return '<svg class="glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
+           'stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" ' +
+           'aria-hidden="true">' + (ICON[kind] || ICON.info) + "</svg>";
+  }
+  /* Status is never colour alone: every pill carries an icon and a word. */
+  function pill(kind, label) {
+    var mark = { good: "m5 8.5 2 2 4.5-4.5", critical: "M8 3 1 15h14z",
+                 warning: "M8 3 1 15h14z", muted: "" }[kind] || "";
+    var svg = mark ? '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" ' +
+                     'stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="' +
+                     mark + '"/></svg>' : "";
+    return '<span class="pill ' + kind + '">' + svg + esc(label) + "</span>";
+  }
+
+  // ------------------------------------------------------------------- theme
+
   function applyTheme(mode) {
-    document.documentElement.setAttribute("data-theme", mode);
-    try { localStorage.setItem("cp-theme", mode); } catch (e) { /* private mode */ }
+    document.documentElement.setAttribute("data-theme", mode || "");
     $("btn-theme").setAttribute("aria-pressed", mode === "dark" ? "true" : "false");
-    // Charts resolve CSS variables at creation time, so a theme change needs a redraw
-    // rather than a restyle.
-    if (LAST) paint(LAST);
+    try { localStorage.setItem("cp-theme", mode || ""); } catch (e) { /* private mode */ }
+    if (LAST) paint(LAST);          // redraw, do not restyle -- see the file header
   }
+  $("btn-theme").addEventListener("click", function () {
+    var now = document.documentElement.getAttribute("data-theme");
+    var dark = now === "dark" ||
+      (now !== "light" && window.matchMedia("(prefers-color-scheme: dark)").matches);
+    applyTheme(dark ? "light" : "dark");
+  });
 
-  /* ------------------------------------------------------------------- form */
-  function buildChecks(hostId, items, counterId) {
-    var host = $(hostId);
-    if (!host) return;
-    host.innerHTML = "";
-    var groups = {};
-    (items || []).forEach(function (it) {
-      (groups[it.group] = groups[it.group] || []).push(it);
-    });
-    var names = Object.keys(groups);
-    names.forEach(function (g) {
-      if (names.length > 1) {
-        var h = document.createElement("p");
-        h.className = "hint";
-        h.style.cssText = "width:100%;margin:6px 0 2px";
-        h.textContent = g;
-        host.appendChild(h);
-      }
-      groups[g].forEach(function (it) {
-        var lab = document.createElement("label");
-        // red_flag comes from the server, which is also what evaluates the rules. The
-        // previous dashboard kept its own camelCase copy of this list and never matched.
-        lab.className = "chk" + (it.red_flag ? " red" : "");
-        lab.innerHTML = '<input type="checkbox" value="' + esc(it.key) + '">'
-          + (it.red_flag ? '<span class="dot" aria-hidden="true"></span>' : "")
-          + "<span>" + esc(it.label) + "</span>"
-          + (it.red_flag ? '<span class="sr-only"> (red flag)</span>' : "");
-        host.appendChild(lab);
-      });
-    });
-    if (counterId) {
-      host.addEventListener("change", function () {
-        $(counterId).textContent = checked(hostId).length;
-      });
-    }
-  }
+  // -------------------------------------------------------------------- boot
 
-  function checked(hostId) {
-    return Array.prototype.slice
-      .call($(hostId).querySelectorAll("input:checked"))
-      .map(function (i) { return i.value; });
-  }
-
-  function parseReadings(raw) {
-    var rows = [], errors = [], seen = {};
-    String(raw || "").split(/\r?\n/).forEach(function (line, n) {
-      var t = line.trim();
-      if (!t || t.charAt(0) === "#") return;
-      var p = t.split(/[,;\t]+/).map(function (x) { return x.trim(); });
-      if (p.length < 3) { errors.push("line " + (n + 1) + ": need date, SBP, DBP"); return; }
-      var d = p[0], sbp = Number(p[1]), dbp = Number(p[2]);
-      if (!/^\d{4}-\d{2}-\d{2}/.test(d)) { errors.push("line " + (n + 1) + ": date must be YYYY-MM-DD"); return; }
-      if (!isFinite(sbp) || !isFinite(dbp)) { errors.push("line " + (n + 1) + ": SBP/DBP must be numeric"); return; }
-      if (sbp - dbp < 10) { errors.push("line " + (n + 1) + ": pulse pressure below 10 mmHg"); return; }
-      if (seen[d]) { errors.push("line " + (n + 1) + ": duplicate date " + d + " — merge same-day sessions"); return; }
-      seen[d] = 1;
-      var r = { date: d, sbp: Math.round(sbp), dbp: Math.round(dbp) };
-      if (p[3] && isFinite(Number(p[3]))) r.pulse = Number(p[3]);
-      if (p[4] && isFinite(Number(p[4]))) r.weight = Number(p[4]);
-      if (p[5] && isFinite(Number(p[5]))) r.idwg = Number(p[5]);
-      rows.push(r);
-    });
-    rows.sort(function (a, b) { return a.date < b.date ? -1 : 1; });
-    return { rows: rows, errors: errors };
-  }
-
-  /* Deterministic sample so the page looks the same on every load and a demo is repeatable. */
-  function sampleReadings() {
-    var seed = 20260730, out = [], base = 138, d = new Date("2026-04-06T00:00:00Z");
-    function rnd() { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648; }
-    for (var i = 0; i < 42; i++) {
-      base += (rnd() - 0.44) * 4.2;
-      var sbp = Math.round(Math.max(105, Math.min(196, base + (rnd() - 0.5) * 9)));
-      var dbp = Math.round(Math.max(58, Math.min(112, sbp * 0.55 + (rnd() - 0.5) * 7)));
-      out.push(d.toISOString().slice(0, 10) + ", " + sbp + ", " + dbp + ", "
-               + Math.round(64 + rnd() * 22) + ", " + (68 + rnd() * 2.4).toFixed(1));
-      d = new Date(d.getTime() + (i % 3 === 2 ? 3 : 2) * 86400000);
+  /* 40 sessions, because the `_z` and `_slope30` features need a 30-session window and a
+   * shorter sample leaves them NaN -- the demo would then understate what the model does. */
+  var SAMPLE = (function () {
+    var out = [], d = new Date(2026, 3, 1);
+    for (var i = 0; i < 40; i++) {
+      var sbp = 138 + (i % 7) * 3 - (i % 3) + Math.round(i / 8);
+      out.push(d.toISOString().slice(0, 10) + ", " + sbp + ", " + (78 + (i % 5)) +
+               ", " + (74 + (i % 9)) +
+               ", w=" + (73.4 + (i % 6) * 0.3).toFixed(1) +
+               ", idwg=" + (1.9 + (i % 6) * 0.15).toFixed(2) +
+               ", meds=" + (i % 5 === 0 ? "n" : "y") +
+               ", uf=" + (2.2 + (i % 4) * 0.1).toFixed(1) + ", hrs=4");
+      d.setDate(d.getDate() + 2);
     }
     return out.join("\n");
+  })();
+
+  function checkboxes(host, items, name) {
+    clear(host);
+    items.forEach(function (it) {
+      var l = document.createElement("label");
+      l.className = "check";
+      l.innerHTML = '<input type="checkbox" name="' + name + '" value="' + esc(it.key) + '">' +
+                    "<span>" + esc(it.label) + "</span>";
+      host.appendChild(l);
+    });
   }
 
-  function updateCount() {
-    var p = parseReadings($("readings").value);
-    var n = p.rows.length;
-    var note = n + " session" + (n === 1 ? "" : "s");
-    if (n < 7) note += " — below the 7-reading cold-start floor; no forecast will be issued";
-    else if (n < 48) note += " — below the 48-reading steady state; low-confidence badge";
-    $("reading-count").textContent = note;
+  async function boot() {
+    $("readings").value = SAMPLE;
+    try {
+      VOCAB = await (await fetch("/api/schema")).json();
+      checkboxes($("conditions"), VOCAB.conditions || [], "cond");
+      checkboxes($("medications"), VOCAB.medications || [], "med");
+      checkboxes($("symptoms"), VOCAB.symptoms || [], "sym");
+    } catch (e) { /* the form still works with the free-text fields alone */ }
+    refreshHealth();
   }
 
-  /* -------------------------------------------------------------- renderers */
-
-  function renderNotices(d) {
-    var host = $("notices");
-    host.innerHTML = "";
-    function add(cls, html) {
-      var e = document.createElement("p");
-      e.className = "notice " + cls;
-      e.innerHTML = html;
-      host.appendChild(e);
-    }
-    if (d.degraded && d.degraded.model_loaded === false) {
-      add("warn", "<strong>No trained model is loaded.</strong> "
-        + esc(d.degraded.reason || "") + " The rule engine below is unaffected — it is the "
-        + "safety-critical layer and needs no model. " + esc(d.degraded.remedy || ""));
-    }
-    if (d.truncated) {
-      add("", "Charts and the backtest use the most recent "
-        + d.truncated.enrichment_readings + " of " + d.truncated.submitted
-        + " readings. The forecast itself uses all of them.");
-    }
-    var st = d.staleness || {};
-    if (st.days_since_last_reading > (st.max_forecast_age_days || 14)) {
-      add("warn", "The most recent reading is " + fmt(st.days_since_last_reading, 0)
-        + " days old, beyond the " + (st.max_forecast_age_days || 14)
-        + "-day limit. The personalised threshold still stands; no forecast is issued.");
-    }
-  }
-
-  function renderBanner(d) {
-    var pers = d.personalisation || {}, ew = d.early_warning || {};
-    var eng = (d.rule_engine || {}).current || {};
-    var pa = (d.predicted_alert || {}).horizons || [];
-    var firstFire = pa.filter(function (h) { return h.fired; })[0];
-    var cls, icon, title, detail;
-
-    if (eng.is_emergency) {
-      cls = "banner-critical"; icon = "⚠";
-      title = "Rule engine fired an emergency on the latest reading";
-      detail = pretty(eng.rule_id) + ". The emergency floor is never personalised and the "
-             + "engine is authoritative here.";
-    } else if (ew.flagged) {
-      cls = "banner-critical"; icon = "⚠";
-      title = "Early-warning detector flagged this patient";
-      detail = "Score " + fmt(ew.score, 3) + " at or above the " + ew.budget_pct
-             + "% cut of " + fmt(ew.cut, 3) + ", roughly " + fmt(ew.est_lead_days, 1)
-             + " days of lead time.";
-    } else if (firstFire) {
-      cls = "banner-watch"; icon = "◆";
-      title = pretty(firstFire.tier) + " forecast in about " + fmt(firstFire.days_ahead, 1) + " days";
-      detail = "Predicted SBP " + fmt(firstFire.sbp) + " mmHg would fire "
-             + pretty(firstFire.rule_id) + " if the trend holds.";
-    } else if (eng.fired) {
-      cls = "banner-watch"; icon = "◆";
-      title = pretty(eng.tier) + " on the latest reading";
-      detail = pretty(eng.rule_id) + ". No further breach forecast in the coming horizons.";
-    } else if (d.confidence_tier === "stale") {
-      cls = ""; icon = "○"; title = "History too old for a forecast"; detail = d.note || "";
-    } else if (d.confidence_tier === "cold_start") {
-      cls = ""; icon = "○"; title = "Cold start — no forecast issued"; detail = d.note || "";
-    } else if (d.confidence_tier === "no_model") {
-      cls = ""; icon = "○"; title = "Rule engine only — no model loaded";
-      detail = "Nothing fired on the latest reading.";
-    } else {
-      cls = "banner-good"; icon = "✓"; title = "Nothing due";
-      detail = "The engine fired nothing on the latest reading, the forecast stays below the "
-             + "personalised threshold of " + fmt(pers.threshold) + " mmHg, and the detector "
-             + "is below its cut.";
-    }
-    $("banner").className = "banner " + cls;
-    $("banner-icon").textContent = icon;
-    $("banner-title").textContent = title;
-    $("banner-detail").textContent = detail;
-    var t = d.timings || {};
-    $("banner-meta").textContent = (d.n_observations || 0) + " readings"
-      + (t.predict_ms != null ? " · predict " + t.predict_ms + " ms" : "")
-      + (t.total_ms != null ? " · total " + t.total_ms + " ms" : "")
-      + (d.model_version ? " · " + d.model_version : "");
-  }
-
-  function renderTiles(d) {
-    var pers = d.personalisation || {}, eng = (d.rule_engine || {}).current || {};
-    var chip = $("v-engine-tier");
-    chip.textContent = eng.tier ? pretty(eng.tier) : "No alert";
-    chip.className = "chip " + (eng.is_emergency ? "chip-critical"
-                     : eng.fired ? "chip-warning" : "chip-good");
-    $("v-engine-note").textContent = eng.rule_id
-      ? pretty(eng.rule_id) + (eng.axis_mode === "PERSONALIZED" ? " · personalised" : "")
-      : (eng.gate_reason && eng.gate_reason !== "NONE"
-         ? "gated: " + pretty(eng.gate_reason) : "nothing fired on this reading");
-
-    $("v-threshold").textContent = pers.threshold != null ? fmt(pers.threshold) : "–";
-    $("v-threshold-note").textContent = pers.offset != null
-      ? "offset " + (pers.offset > 0 ? "+" : "") + fmt(pers.offset) + " mmHg"
-        + (pers.capped ? " — bound by the governance cap" : "")
-        + (pers.cohort_key ? " · cohort " + pers.cohort_key : "")
-        + (pers.n_warm != null ? " · " + pers.n_warm + " readings" : "")
-      : (d.confidence_tier === "no_model" ? "no model loaded" : "");
-
-    var labels = { cold_start: "Cold start", bootstrapping: "Bootstrapping",
-                   steady: "Steady", stale: "Stale", no_model: "No model" };
-    $("v-tier").textContent = labels[d.confidence_tier] || d.confidence_tier || "–";
-    $("v-tier-note").textContent = (d.n_observations || 0) + " readings"
-      + (d.note ? " — " + d.note : "");
-
-    var ew = d.early_warning, c = $("v-ew-chip"), m = $("v-ew-meter");
-    if (!ew) {
-      c.textContent = "not issued"; c.className = "chip chip-muted";
-      m.hidden = true;
-      $("v-ew-note").textContent = d.confidence_tier === "no_model"
-        ? "requires a trained model" : "below the cold-start floor";
-    } else {
-      c.textContent = ew.flagged ? "⚠ Flagged" : "✓ Not flagged";
-      c.className = "chip " + (ew.flagged ? "chip-critical" : "chip-good");
-      m.hidden = false;
-      var pct = Math.max(2, Math.min(100, (ew.score / (ew.cut || 1)) * 80));
-      var fill = $("v-ew-fill");
-      fill.style.width = pct + "%";
-      fill.className = "meter-fill" + (ew.flagged ? " over" : "");
-      m.setAttribute("aria-valuenow", Math.round(pct));
-      $("v-ew-note").textContent = "score " + fmt(ew.score, 3) + " of cut " + fmt(ew.cut, 3)
-        + " · est. lead " + fmt(ew.est_lead_days, 1) + " d";
+  async function refreshHealth() {
+    var chip = $("model-chip"), text = $("model-chip-text");
+    try {
+      var h = await (await fetch("/api/health")).json();
+      chip.className = "chip " + (h.model_loaded ? "is-live" : "is-degraded");
+      text.textContent = h.model_loaded
+        ? (h.model_version || "model loaded")
+        : "rule engine only";
+      chip.title = h.model_loaded
+        ? "Serving " + (h.model_version || "") + " on scikit-learn " + (h.sklearn_runtime || "")
+        : (h.detail || "no model on disk; the rule engine is unaffected");
+    } catch (e) {
+      chip.className = "chip"; text.textContent = "offline";
     }
   }
 
-  function renderForecastChart(d) {
-    var host = $("chart");
-    host.innerHTML = "";
-    var hist = d.history || [];
-    if (!hist.length) return;
-    var fc = (d.forecast && d.forecast.sbp) || {};
-    var pts = Object.keys(fc).map(function (k) { return fc[k]; })
-      .sort(function (a, b) { return a.steps_ahead - b.steps_ahead; });
+  // ----------------------------------------------------------------- request
 
-    var s1 = C.cssVar("--series-1"), s2 = C.cssVar("--series-2");
-    var warn = C.cssVar("--status-warning"), crit = C.cssVar("--status-critical");
-    var muted = C.cssVar("--text-muted");
-    var thr = (d.personalisation || {}).threshold, floor = d.emergency_floor_mmHg;
+  /* `date, sbp, dbp[, pulse]` positionally, then any number of `key=value` tokens.
+   *
+   * The extra fields are per-SESSION, not per-patient, and that is the whole point: weight
+   * and same-day adherence change between sessions, and the model was fitted on their lagged
+   * and rolling forms. Supplying them as a profile constant would be a different -- and
+   * wrong -- statement. Positional-only would have needed nine columns on every line with
+   * commas holding the empty ones; keyed tokens let a user give what they have.
+   *
+   * An unknown key is an ERROR, not an ignored token. The schema forbids unknown fields for
+   * the same reason: a mistyped `weight=` that silently did nothing would produce a
+   * confident forecast built on a feature the user believes they supplied. */
+  var TOKENS = {
+    w: ["weight", "kg"], weight: ["weight", "kg"],
+    idwg: ["idwg", "kg"],
+    uf: ["uf_total", "L"], hrs: ["session_hours", "h"], drop: ["sbp_drop", "mmHg"]
+  };
 
-    var vals = hist.map(function (h) { return h.sbp; })
-      .concat(pts.map(function (p) { return p.point; }))
-      .concat(pts.map(function (p) { return p.lo80; }))
-      .concat(pts.map(function (p) { return p.hi80; }))
-      .concat([thr]).filter(function (v) { return v != null && isFinite(v); });
-    var dom = C.domain(vals, 0.1);
-    var yMin = Math.floor(dom[0] / 10) * 10, yMax = Math.ceil(dom[1] / 10) * 10;
+  function parseReadings(text) {
+    var rows = [];
+    text.split("\n").forEach(function (raw, i) {
+      var line = raw.trim();
+      if (!line || line[0] === "#") return;
+      var where = "line " + (i + 1) + ": ";
+      var parts = line.split(/[,;\t]+/).map(function (x) { return x.trim(); }).filter(Boolean);
+      var pos = parts.filter(function (x) { return x.indexOf("=") < 0; });
+      var kv = parts.filter(function (x) { return x.indexOf("=") >= 0; });
 
-    var W = 900, H = 300, m = { t: 16, r: 18, b: 34, l: 46 };
-    var iw = W - m.l - m.r, ih = H - m.t - m.b;
-    var n = hist.length + pts.length;
-    var X = function (i) { return m.l + (n <= 1 ? 0 : (i / (n - 1)) * iw); };
-    var svg = C.svgEl("svg", { viewBox: "0 0 " + W + " " + H, role: "img",
-                               preserveAspectRatio: "xMidYMid meet",
-                               "aria-label": hist.length + " observed sessions and "
-                                 + pts.length + " forecast horizons" });
-    var Y = C.axes(svg, m, iw, ih, yMin, yMax, function (v) { return String(Math.round(v)); }, 4);
+      if (pos.length < 3) throw new Error(where + "expected date, systolic, diastolic");
+      var r = { date: pos[0], sbp: Math.round(Number(pos[1])), dbp: Math.round(Number(pos[2])) };
+      if (!isFinite(r.sbp) || !isFinite(r.dbp)) {
+        throw new Error(where + "systolic and diastolic must be numbers");
+      }
+      if (pos.length > 3) {
+        if (!isFinite(Number(pos[3]))) throw new Error(where + "pulse must be a number");
+        r.pulse = Number(pos[3]);
+      }
 
-    C.refLine(svg, Y, floor, m, iw, crit, "emergency floor " + fmt(floor, 0), yMin, yMax);
-    C.refLine(svg, Y, thr, m, iw, warn, "threshold " + fmt(thr), yMin, yMax);
-
-    var obs = hist.map(function (h, i) { return [X(i), Y(h.sbp)]; });
-    C.line(svg, obs, s1, { width: 2 });
-    C.dots(svg, obs.slice(-1), s1, 3);
-
-    if (pts.length) {
-      var start = obs[obs.length - 1];
-      var fpts = [start].concat(pts.map(function (p, i) {
-        return [X(hist.length + i), Y(p.point)];
-      }));
-      C.line(svg, fpts, s2, { width: 2, dash: "6 4" });
-      pts.forEach(function (p, i) {
-        var x = X(hist.length + i);
-        if (p.lo80 != null && p.hi80 != null) {
-          svg.appendChild(C.svgEl("line", { x1: x, x2: x, y1: Y(p.lo80), y2: Y(p.hi80),
-                                            stroke: s2, "stroke-width": 1.5, opacity: .5 }));
-          [p.lo80, p.hi80].forEach(function (v) {
-            svg.appendChild(C.svgEl("line", { x1: x - 4, x2: x + 4, y1: Y(v), y2: Y(v),
-                                              stroke: s2, "stroke-width": 1.5, opacity: .6 }));
-          });
+      kv.forEach(function (tok) {
+        var eq = tok.indexOf("=");
+        var k = tok.slice(0, eq).trim().toLowerCase(), v = tok.slice(eq + 1).trim();
+        if (k === "meds") {
+          if (!/^(y|yes|n|no|1|0)$/i.test(v)) {
+            throw new Error(where + "meds= must be y or n, got " + JSON.stringify(v));
+          }
+          r.took_all_meds = /^(y|yes|1)$/i.test(v);
+          return;
         }
-        svg.appendChild(C.svgEl("circle", { cx: x, cy: Y(p.point), r: 3.5, fill: s2 }));
+        if (k === "sym") {
+          // `+`-joined so the token survives the comma split that separates fields.
+          r.symptoms = v.split("+").map(function (s) { return s.trim(); }).filter(Boolean);
+          return;
+        }
+        var spec = TOKENS[k];
+        if (!spec) {
+          throw new Error(where + "unknown field " + JSON.stringify(k) + ". Known: " +
+                          Object.keys(TOKENS).concat(["meds", "sym"]).join(", "));
+        }
+        if (!isFinite(Number(v))) {
+          throw new Error(where + k + "= must be a number in " + spec[1]);
+        }
+        r[spec[0]] = Number(v);
       });
+      rows.push(r);
+    });
+    if (!rows.length) throw new Error("no readings entered");
+    return rows;
+  }
+
+  function picked(name) {
+    return Array.prototype.slice
+      .call(document.querySelectorAll('input[name="' + name + '"]:checked'))
+      .map(function (el) { return el.value; });
+  }
+  function num(id) {
+    var v = $(id).value;
+    return v === "" ? null : Number(v);
+  }
+
+  function buildRequest() {
+    var rows = parseReadings($("readings").value);
+    // Symptoms are per-READING in the schema, not per-profile: they describe what the patient
+    // felt at a measurement. The checkboxes ask "at the latest reading", so they attach to the
+    // last row only -- back-filling would invent a symptom record that was never reported. A
+    // `sym=` token on that line already said the same thing, so it wins over the checkboxes.
+    var syms = picked("sym");
+    if (syms.length && !rows[rows.length - 1].symptoms) {
+      rows[rows.length - 1].symptoms = syms;
     }
 
-    var idx = [0, Math.floor(hist.length / 2), hist.length - 1]
-      .filter(function (v, i, a) { return v >= 0 && a.indexOf(v) === i; });
-    C.xTicks(svg, m, ih, idx, X, function (i) {
-      return (hist[i] && hist[i].ts ? hist[i].ts.slice(5) : "");
-    });
+    var profile = {
+      age: num("age") || 65, is_male: Number($("sex").value),
+      is_dm: Number($("dm").value), is_pregnant: Number($("pregnant").value),
+      hf_type: $("hf-type").value,
+      conditions: picked("cond"), medications: picked("med"),
+      missed_3d: num("missed-3d") || 0,
+      adherence_7d: (num("adherence") === null ? 100 : num("adherence")) / 100,
+      step_offset: num("step-offset") || 0
+    };
+    if (num("provider-target") !== null) profile.provider_target = num("provider-target");
+    if (num("dryweight") !== null) profile.dryweight = num("dryweight");
+    if ($("first-dialysis").value) profile.first_dialysis = $("first-dialysis").value;
 
-    C.hoverLayer(svg, host, m, iw, ih, hist.length, X, Y,
-      function (i) { return { y: hist[i].sbp }; },
-      function (i, v) {
-        return hist[i].ts + ": " + v.y + " over " + hist[i].dbp + " mmHg";
-      });
-
-    host.appendChild(svg);
-    C.legendInto($("chart-legend"), [
-      { colour: s1, label: "Observed SBP" },
-      { colour: s2, dash: true, label: "Forecast with 80% band" },
-      { colour: warn, label: "Personalised threshold" },
-      { colour: crit, label: "Emergency floor (never personalised)" }]);
+    return {
+      patient_id: $("patient-id").value || "demo",
+      profile: profile,
+      readings: rows,
+      // Off unless asked: this block rebuilds the feature frame per horizon and per
+      // quadrature node, which measured at 5.0 s of a 7.1 s request.
+      enrich: { symptom_chained: $("opt-chain") ? $("opt-chain").checked : false }
+    };
   }
 
-  function renderForecastTable(d) {
-    var fc = (d.forecast && d.forecast.sbp) || {}, thr = (d.personalisation || {}).threshold;
-    var tb = $("forecast-table").querySelector("tbody");
-    tb.innerHTML = "";
-    Object.keys(fc).sort(function (a, b) { return fc[a].steps_ahead - fc[b].steps_ahead; })
-      .forEach(function (k) {
-        var f = fc[k], delta = thr != null ? f.point - thr : null;
-        var tr = document.createElement("tr");
-        tr.innerHTML = "<td>+" + f.steps_ahead + " sessions</td>"
-          + '<td class="num">' + fmt(f.point) + "</td>"
-          + '<td class="num">' + (f.lo80 != null ? fmt(f.lo80) + " – " + fmt(f.hi80) : "–") + "</td>"
-          + '<td class="num">' + fmt(f.days_ahead_est, 1) + "</td>"
-          + "<td>" + (delta == null ? "–" : (delta >= 0 ? "▲ " + fmt(delta) + " over"
-                                                        : "▼ " + fmt(Math.abs(delta)) + " under")) + "</td>";
-        tb.appendChild(tr);
-      });
-    var band = Object.keys(fc).map(function (k) { return fc[k]; })
-      .filter(function (f) { return f.interval_basis; })[0];
-    $("interval-basis").textContent = band ? "Interval basis: " + band.interval_basis
-      : (Object.keys(fc).length ? "No conformal interval on these horizons."
-                                : "No forecast issued.");
-    $("forecast-card").hidden = !Object.keys(fc).length && !(d.history || []).length;
-  }
-
-  function renderPredicted(d) {
-    var pa = d.predicted_alert || {}, host = $("predicted-alerts");
-    host.innerHTML = "";
-    var hs = pa.horizons || [];
-    if (!hs.length) {
-      host.innerHTML = '<p class="hint">No forecast issued, so no predicted alerts.</p>';
-      $("predicted-note").textContent = pa.basis || "";
-      return;
-    }
-    hs.forEach(function (h) {
-      var cls = h.is_emergency ? "chip-critical" : h.fired ? "chip-warning" : "chip-good";
-      var card = document.createElement("div");
-      card.className = "horizon";
-      card.innerHTML =
-        '<p class="horizon-when">in ~' + fmt(h.days_ahead, 1) + " days · +" + h.steps_ahead + " sessions</p>"
-        + '<p class="horizon-bp">' + fmt(h.sbp)
-        + (h.dbp != null ? " / " + fmt(h.dbp) : "") + '<span class="unit">mmHg</span></p>'
-        + '<p class="horizon-band">' + (h.lo80 != null ? "80% " + fmt(h.lo80) + " – " + fmt(h.hi80)
-                                                       : "no interval") + "</p>"
-        + '<span class="chip ' + cls + '">' + esc(h.tier ? pretty(h.tier) : "No alert") + "</span>"
-        + (h.rule_id ? '<p class="horizon-rule">' + esc(pretty(h.rule_id)) + "</p>" : "");
-      host.appendChild(card);
-    });
-    $("predicted-note").textContent = [pa.basis, pa.symptom_note].filter(Boolean).join(" ");
-  }
-
-  function renderEngine(d) {
-    var eng = d.rule_engine;
-    if (!eng) { $("engine-card").hidden = true; return; }
-    $("engine-card").hidden = false;
-    if (eng.error) {
-      $("engine-note").textContent = "Rule engine unavailable: " + eng.error;
-      return;
-    }
-    var tl = $("engine-timeline");
-    tl.innerHTML = "";
-    (eng.history || []).forEach(function (h) {
-      var s = document.createElement("span");
-      s.className = "tl" + (h.tier ? " tl-" + h.tier : "");
-      s.title = h.ts + (h.tier ? " · " + pretty(h.tier) + " · " + pretty(h.rule_id)
-                               : " · no alert");
-      tl.appendChild(s);
-    });
-    $("engine-count").textContent = eng.fired_count + " of " + (eng.history || []).length
-      + " readings fired" + (eng.emergency_count ? ", " + eng.emergency_count + " emergency" : "");
-
-    var tb = $("engine-table").querySelector("tbody");
-    tb.innerHTML = "";
-    (eng.history || []).slice().reverse().filter(function (h) { return h.fired; })
-      .slice(0, 12).forEach(function (h) {
-        var tr = document.createElement("tr");
-        tr.innerHTML = "<td>" + esc(h.ts) + "</td><td>" + esc(pretty(h.tier)) + "</td><td>"
-                     + esc(pretty(h.rule_id)) + "</td>";
-        tb.appendChild(tr);
-      });
-    var counts = Object.keys(eng.tier_counts || {}).map(function (k) {
-      return pretty(k) + " " + eng.tier_counts[k];
-    }).join(" · ");
-    $("engine-note").textContent = (counts ? counts + ". " : "")
-      + (eng.note || "")
-      + " The engine is deterministic: whatever you enter above is evaluated immediately."
-      + (eng.personalised ? "" : " Personalisation is inactive — no model threshold available.");
-  }
-
-  function renderAnomaly(d) {
-    var an = d.anomaly, panel = $("anomaly-panel"), host = $("anomaly-chart");
-    host.innerHTML = "";
-    if (!an || !an.points || an.points.length < 2) { panel.hidden = true; return; }
-    panel.hidden = false;
-    var pts = an.points, cut = an.cut;
-    var s1 = C.cssVar("--series-1"), warn = C.cssVar("--status-warning");
-    var crit = C.cssVar("--status-critical"), muted = C.cssVar("--text-muted");
-
-    var vals = pts.map(function (p) { return p.score; });
-    if (cut != null) vals.push(cut);
-    var dom = C.domain(vals, 0.15);
-    var W = 900, H = 250, m = { t: 16, r: 60, b: 34, l: 52 };
-    var iw = W - m.l - m.r, ih = H - m.t - m.b, n = pts.length;
-    var X = function (i) { return m.l + (n <= 1 ? 0 : (i / (n - 1)) * iw); };
-    var svg = C.svgEl("svg", { viewBox: "0 0 " + W + " " + H, role: "img",
-                               preserveAspectRatio: "xMidYMid meet",
-                               "aria-label": "detector score across " + n + " sessions" });
-    var Y = C.axes(svg, m, iw, ih, dom[0], dom[1],
-                   function (v) { return v.toFixed(2); }, 4);
-
-    var warmN = pts.filter(function (p) { return p.warmup; }).length;
-    if (warmN > 0) C.shadeBand(svg, m.l, X(Math.max(warmN - 1, 0)), m, ih, muted, "warm-up");
-    C.refLine(svg, Y, cut, m, iw, warn, "cut " + fmt(cut, 3), dom[0], dom[1]);
-    C.line(svg, pts.map(function (p, i) { return [X(i), Y(p.score)]; }), s1, { width: 1.8 });
-    pts.forEach(function (p, i) {
-      if (p.flagged) svg.appendChild(C.svgEl("circle", { cx: X(i), cy: Y(p.score), r: 3.5,
-                                                         fill: crit }));
-    });
-    C.xTicks(svg, m, ih, [0, Math.floor(n / 2), n - 1].filter(function (v, i, a) {
-      return a.indexOf(v) === i;
-    }), X, function (i) { return pts[i].ts ? pts[i].ts.slice(5) : ""; });
-    C.hoverLayer(svg, host, m, iw, ih, n, X, Y,
-      function (i) { return { y: pts[i].score }; },
-      function (i, v) { return pts[i].ts + ": score " + v.y.toFixed(3)
-                        + (pts[i].flagged ? ", flagged" : ""); });
-    host.appendChild(svg);
-
-    $("anomaly-sub").textContent = an.event_definition || "";
-    C.legendInto($("anomaly-legend"), [
-      { colour: s1, label: "Detector score" },
-      { colour: warn, dash: true, label: "Alert cut at the " + (an.budget_pct || 5) + "% budget" },
-      { colour: crit, label: "Flagged session" }]);
-    $("anomaly-note").textContent = an.n_flagged + " of " + an.n_settled
-      + " settled sessions crossed the cut. The first " + an.warmup_readings
-      + " sessions are warm-up: the score's own inputs are not yet defined there.";
-  }
-
-  function renderBacktest(d) {
-    var bt = d.backtest, panel = $("backtest-panel"), host = $("backtest-chart");
-    host.innerHTML = "";
-    var tb = $("backtest-table").querySelector("tbody");
-    tb.innerHTML = "";
-    if (!bt || !bt.horizons || !bt.horizons.length) { panel.hidden = true; return; }
-    panel.hidden = false;
-    bt.horizons.forEach(function (h) {
-      var tr = document.createElement("tr");
-      tr.innerHTML = "<td>+" + h.horizon + " sessions</td>"
-        + '<td class="num">' + fmt(h.days_ahead, 1) + "</td>"
-        + '<td class="num">' + h.n + "</td>"
-        + '<td class="num">' + fmt(h.mae, 2) + "</td>"
-        + '<td class="num">' + Math.round(h.within_10 * 100) + "%</td>";
-      tb.appendChild(tr);
-    });
-
-    var first = bt.horizons[0];
-    var rows = (bt.series || {})["h" + first.horizon] || [];
-    if (rows.length < 2) { host.innerHTML = ""; return; }
-    var s1 = C.cssVar("--series-1"), s2 = C.cssVar("--series-2"), crit = C.cssVar("--status-critical");
-    var vals = rows.map(function (r) { return r.actual; })
-      .concat(rows.map(function (r) { return r.predicted; }));
-    var dom = C.domain(vals, 0.12);
-    var yMin = Math.floor(dom[0] / 10) * 10, yMax = Math.ceil(dom[1] / 10) * 10;
-    var W = 900, H = 260, m = { t: 16, r: 18, b: 34, l: 46 };
-    var iw = W - m.l - m.r, ih = H - m.t - m.b, n = rows.length;
-    var X = function (i) { return m.l + (n <= 1 ? 0 : (i / (n - 1)) * iw); };
-    var svg = C.svgEl("svg", { viewBox: "0 0 " + W + " " + H, role: "img",
-                               preserveAspectRatio: "xMidYMid meet",
-                               "aria-label": "actual against predicted over " + n + " sessions" });
-    var Y = C.axes(svg, m, iw, ih, yMin, yMax, function (v) { return String(Math.round(v)); }, 4);
-    C.line(svg, rows.map(function (r, i) { return [X(i), Y(r.actual)]; }), s1, { width: 2 });
-    C.line(svg, rows.map(function (r, i) { return [X(i), Y(r.predicted)]; }), s2,
-           { width: 1.8, dash: "5 4" });
-
-    var worst = rows.reduce(function (a, b, i) {
-      return Math.abs(b.error) > Math.abs(rows[a].error) ? i : a;
-    }, 0);
-    svg.appendChild(C.svgEl("circle", { cx: X(worst), cy: Y(rows[worst].actual), r: 4,
-                                        fill: crit }));
-    svg.appendChild(C.svgEl("text", { x: X(worst), y: Y(rows[worst].actual) - 9,
-                                      "text-anchor": "middle", fill: crit, "font-size": 10.5 },
-                            "worst miss " + fmt(rows[worst].error) + " mmHg"));
-    C.xTicks(svg, m, ih, [0, Math.floor(n / 2), n - 1].filter(function (v, i, a) {
-      return a.indexOf(v) === i;
-    }), X, function (i) { return rows[i].ts ? rows[i].ts.slice(5) : ""; });
-    host.appendChild(svg);
-    C.legendInto($("backtest-legend"), [
-      { colour: s1, label: "Actual" },
-      { colour: s2, dash: true, label: "Predicted +" + first.horizon + " sessions ahead" }]);
-    $("backtest-note").textContent = bt.caption || "";
-  }
-
-  function renderSymptoms(d) {
-    var sr = d.symptom_risk, panel = $("symptom-panel");
-    if (!sr) { panel.hidden = true; return; }
-    panel.hidden = false;
-    // Non-dismissible and first: these labels were generated, and a reader who misses that
-    // will read a synthetic hazard model as a clinical prediction.
-    $("symptom-warning").textContent = sr.warning || "";
-    var tb = $("symptom-table").querySelector("tbody");
-    tb.innerHTML = "";
-    if (!sr.available) {
-      $("symptom-note").textContent = sr.reason || "";
-      return;
-    }
-    (sr.items || []).forEach(function (it) {
-      var tr = document.createElement("tr");
-      tr.innerHTML = "<td>" + esc(it.label) + (it.red_flag
-          ? ' <span class="chip chip-critical">red flag</span>' : "") + "</td>"
-        + "<td>" + esc(it.mechanism || "–") + "</td>"
-        + '<td class="num">' + fmt(it.prob * 100, 1) + "%</td>"
-        + '<td class="num">' + (it.cut != null ? fmt(it.cut * 100, 1) + "%" : "–") + "</td>"
-        + "<td>" + (it.flagged ? '<span class="chip chip-warning">above cut</span>'
-                               : '<span class="chip chip-muted">below</span>') + "</td>";
-      tb.appendChild(tr);
-    });
-    $("symptom-note").textContent = sr.n_flagged + " of " + (sr.items || []).length
-      + " symptom heads are above their operating cut.";
-  }
-
-  function renderChain(d) {
-    // The forecast-conditioned answer, deliberately a SEPARATE panel from renderSymptoms.
-    // They answer different questions -- risk at the next session from observed history, vs
-    // risk further out given the predicted trajectory -- and only the first is what the heads
-    // were trained to do. Replacing one with the other would hide that.
-    var ch = d.symptom_chained, panel = $("chain-panel");
-    if (!ch) { panel.hidden = true; return; }
-    panel.hidden = false;
-    $("chain-warning").textContent = (d.symptom_risk && d.symptom_risk.warning) || "";
-    var tb = $("chain-table").querySelector("tbody");
-    tb.innerHTML = "";
-    if (!ch.available) {
-      $("chain-limits").textContent = "";
-      $("chain-note").textContent = ch.reason || "";
-      return;
-    }
-    (ch.items || []).forEach(function (it) {
-      var gap = (it.jensen_gap || 0) * 100;
-      var tr = document.createElement("tr");
-      tr.innerHTML = "<td>" + esc(pretty(it.key)) + (it.red_flag
-          ? ' <span class="chip chip-critical">red flag</span>' : "") + "</td>"
-        + '<td class="num">' + esc(String(it.sessions_ahead)) + "</td>"
-        + "<td>session " + esc(String(it.conditioned_through_session))
-        + " (SBP " + fmt(it.conditioned_through_sbp, 1) + ")</td>"
-        + '<td class="num">' + fmt(it.prob * 100, 1) + "%</td>"
-        + '<td class="num">' + (gap >= 0 ? "+" : "") + fmt(gap, 1) + " pp</td>"
-        + "<td>" + esc(it.mechanism || "–") + "</td>";
-      tb.appendChild(tr);
-    });
-    // Both limits are load-bearing and neither is visible in the numbers.
-    $("chain-limits").textContent = (ch.session_1_note || "") + " "
-      + (ch.conditioning_note || "");
-    $("chain-note").textContent = (ch.cut_note || "") + " " + (ch.reach_note || "");
-  }
-
-  function renderGovernance(d) {
-    var g = (GOV || {});
-    var host = $("gov-list");
-    host.innerHTML = "";
-    var t = d.timings || {};
-    var items = [
-      ["Emergency floor", fmt(d.emergency_floor_mmHg || g.emergency_floor_mmHg, 0) + " mmHg (never personalised)"],
-      ["Population threshold", fmt(g.population_threshold_mmHg, 0) + " mmHg"],
-      ["Offset caps", "−" + fmt(g.offset_cap_tighten, 0) + " / +" + fmt(g.offset_cap_loosen, 0) + " mmHg"],
-      ["Alert budget", fmt(g.alert_budget_pct, 0) + "% (detector only)"],
-      ["Warn window", (g.warn_window || "–") + " sessions"],
-      ["Event quantile", "p" + Math.round((g.event_quantile || 0.95) * 100) + " of the patient’s own SBP"],
-      ["Stale-forecast limit", (g.stale_forecast_max_days || 14) + " days"],
-      ["Model version", d.model_version || "none loaded"],
-      ["Latency", (t.predict_ms != null ? t.predict_ms + " ms core / " + t.total_ms + " ms total"
-                                        : "–")]
-    ];
-    items.forEach(function (kv) {
-      var e = document.createElement("div");
-      e.innerHTML = '<div class="k">' + esc(kv[0]) + '</div><div class="v">' + esc(kv[1]) + "</div>";
-      host.appendChild(e);
-    });
-    var e2 = document.createElement("div");
-    e2.innerHTML = '<div class="k">Journaling input</div><div class="v" style="font-size:11.5px">'
-      + "idwg, sbp_drop and uf_total are absent from journaled sessions but present in "
-      + "training. Those features are served as missing, never zero-filled.</div>";
-    host.appendChild(e2);
-  }
-
-  function paint(d) {
-    LAST = d;
-    $("empty-state").hidden = true;
-    $("output").hidden = false;
-    [["notices", renderNotices], ["banner", renderBanner], ["tiles", renderTiles],
-     ["forecast chart", renderForecastChart], ["forecast table", renderForecastTable],
-     ["predicted", renderPredicted], ["engine", renderEngine], ["anomaly", renderAnomaly],
-     ["backtest", renderBacktest], ["symptoms", renderSymptoms],
-     ["chain", renderChain],
-     ["governance", renderGovernance]].forEach(function (pair) {
-      try { pair[1](d); }
-      catch (e) { console.error("render " + pair[0] + " failed", e); }
-    });
-  }
-
-  /* ---------------------------------------------------------------- network */
   function showError(msg) {
-    var b = $("form-error");
-    b.textContent = msg || "";
-    b.hidden = !msg;
+    var e = $("error");
+    e.textContent = msg; e.hidden = false;
   }
 
   async function predict() {
-    showError("");
-    var parsed = parseReadings($("readings").value);
-    if (parsed.errors.length) { showError(parsed.errors.slice(0, 3).join(" · ")); return; }
-    if (!parsed.rows.length) { showError("Enter at least one reading."); return; }
-
-    var rows = parsed.rows;
-    rows[rows.length - 1].symptoms = checked("symptoms");
-    rows[rows.length - 1].position = $("position").value;
-    rows[rows.length - 1].n_meas = Number($("n-meas").value) || 2;
-
-    var pt = $("provider-target").value;
-    var body = {
-      patient_id: $("patient-id").value || "demo",
-      profile: {
-        age: Number($("age").value) || 65,
-        is_male: Number($("sex").value),
-        is_dm: Number($("dm").value),
-        is_pregnant: Number($("pregnant").value),
-        hf_type: $("hf-type").value,
-        conditions: checked("conditions"),
-        medications: checked("medications"),
-        provider_target: pt === "" ? null : Number(pt),
-        missed_3d: Number($("missed-3d").value) || 0,
-        adherence_7d: Number($("adherence").value),
-        step_offset: Number($("step-offset").value) || 0
-      },
-      readings: rows,
-      // Off unless the user ticks the box. Measured on a 60-reading history this block is
-      // 5.0 s of a 7.1 s request -- 70% of it -- because it rebuilds the causal feature
-      // frame once per horizon and again per quadrature node. EnrichFlags defaults it off
-      // for exactly that reason, and requesting it unconditionally here overrode that
-      // decision and made every page load pay for a panel most users are not reading.
-      enrich: { symptom_chained: $("opt-chain") ? $("opt-chain").checked : false }
-    };
+    $("error").hidden = true;
+    var body;
+    try { body = buildRequest(); }
+    catch (err) { showError(err.message); return; }
 
     var btn = $("btn-predict"), results = document.querySelector(".results");
-    btn.disabled = true; btn.textContent = "Working…";
+    btn.disabled = true; btn.textContent = "Assessing…";
     results.setAttribute("aria-busy", "true");
     var ctl = new AbortController();
     var timer = setTimeout(function () { ctl.abort(); }, 120000);
     try {
       var res = await fetch("/api/predict", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body), signal: ctl.signal });
+        body: JSON.stringify(body), signal: ctl.signal
+      });
       var out = await res.json();
       if (!res.ok) { showError(out.detail || ("Request failed (" + res.status + ")")); return; }
+      LAST = out;
       paint(out);
-    } catch (e) {
-      showError(e.name === "AbortError" ? "The request timed out after 120 s."
-                                        : "Could not reach the API: " + e.message);
+    } catch (err) {
+      showError(err.name === "AbortError"
+        ? "The request timed out after 120 seconds."
+        : "Could not reach the API: " + err.message);
     } finally {
       clearTimeout(timer);
-      btn.disabled = false; btn.textContent = "Get advisory";
+      btn.disabled = false; btn.textContent = "Assess";
       results.setAttribute("aria-busy", "false");
+      refreshHealth();
     }
   }
-
-  var pollTimer = null;
-  function renderTrain(s) {
-    var chip = $("train-state");
-    if (s.running) {
-      chip.textContent = "running"; chip.className = "chip chip-warning";
-      $("train-note").textContent = "Started " + (s.started_at || "") + " (pid " + s.pid + ").";
-    } else if (s.returncode === 0) {
-      chip.textContent = "finished"; chip.className = "chip chip-good";
-      $("train-note").textContent = "Completed " + (s.finished_at || "") + ".";
-    } else if (s.returncode != null) {
-      chip.textContent = "failed (" + s.returncode + ")"; chip.className = "chip chip-critical";
-      $("train-note").textContent = "Exited " + (s.finished_at || "") + " with code " + s.returncode + ".";
-    } else {
-      chip.textContent = "idle"; chip.className = "chip chip-muted";
-    }
-    var pre = $("train-tail");
-    if (s.tail && s.tail.length) {
-      pre.hidden = false;
-      pre.textContent = s.tail.join("\n");
-      pre.scrollTop = pre.scrollHeight;
-    }
-  }
-
-  async function pollTrain() {
-    try {
-      var s = await (await fetch("/api/train/status")).json();
-      renderTrain(s);
-      if (!s.running) {
-        clearInterval(pollTimer); pollTimer = null;
-        refreshModel();
-      }
-    } catch (e) { /* keep polling */ }
-  }
-
-  async function refreshModel() {
-    var chip = $("model-chip");
-    try {
-      var h = await (await fetch("/api/health")).json();
-      if (h.training && h.training.warning) $("train-warning").textContent = h.training.warning;
-      if (h.training && h.training.running) {
-        renderTrain(h.training);
-        if (!pollTimer) pollTimer = setInterval(pollTrain, 3000);
-      }
-      if (!h.model_loaded) {
-        chip.textContent = "no model"; chip.className = "chip chip-critical";
-        chip.title = h.detail || "";
-        return;
-      }
-      var m = await (await fetch("/api/model")).json();
-      GOV = m.governance || {};
-      chip.textContent = m.model_version;
-      chip.className = "chip chip-good";
-      chip.title = m.n_features + " features · " + JSON.stringify(m.shipped || {})
-                 + " · sklearn " + (m.sklearn_runtime || "?");
-    } catch (e) {
-      chip.textContent = "API unreachable"; chip.className = "chip chip-critical";
-    }
-  }
-
-  /* ------------------------------------------------------------------- boot */
-  (async function boot() {
-    try { applyTheme(localStorage.getItem("cp-theme")
-      || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light")); }
-    catch (e) { applyTheme("light"); }
-
-    try {
-      SCHEMA = await (await fetch("/api/schema")).json();
-      buildChecks("conditions", SCHEMA.conditions, "cond-count");
-      buildChecks("medications", SCHEMA.medications, "med-count");
-      buildChecks("symptoms", SCHEMA.symptoms, null);
-    } catch (e) {
-      $("symptoms").innerHTML = '<p class="hint">Could not load the field vocabulary.</p>';
-    }
-    $("readings").value = sampleReadings();
-    updateCount();
-    refreshModel();
-  })();
-
   $("btn-predict").addEventListener("click", predict);
-  $("btn-sample").addEventListener("click", function () {
-    $("readings").value = sampleReadings(); updateCount(); showError("");
-  });
-  $("btn-clear").addEventListener("click", function () {
-    $("readings").value = ""; updateCount(); showError("");
-  });
-  $("readings").addEventListener("input", updateCount);
-  $("btn-theme").addEventListener("click", function () {
-    applyTheme(document.documentElement.getAttribute("data-theme") === "dark" ? "light" : "dark");
-  });
-  $("btn-train").addEventListener("click", async function () {
-    if (!confirm("Start a full training run?\n\n" + ($("train-warning").textContent || ""))) return;
-    var out = await (await fetch("/api/train", { method: "POST" })).json();
-    $("train-note").textContent = out.detail || "";
-    if (!pollTimer) pollTimer = setInterval(pollTrain, 3000);
-    pollTrain();
-  });
-  $("btn-train-cancel").addEventListener("click", async function () {
-    var out = await (await fetch("/api/train/cancel", { method: "POST" })).json();
-    $("train-note").textContent = out.detail || "";
-  });
+
+  // ---------------------------------------------------------------- renderers
+
+  /* Clinical priority order. An emergency outranks a detector flag, which outranks a
+   * forecast breach, which outranks a rule that fired on today's reading. */
+  function renderBanner(d) {
+    var pers = d.personalisation || {}, ew = d.early_warning || {};
+    var eng = (d.rule_engine || {}).current || {};
+    var horizons = (d.predicted_alert || {}).horizons || [];
+    var firstFire = horizons.filter(function (h) { return h.fired; })[0];
+    var kind = "good", title = "Nothing due", detail = "";
+
+    if (eng.is_emergency) {
+      kind = "critical";
+      title = "Emergency on the latest reading";
+      detail = pretty(eng.rule_id) + ". The emergency floor is never personalised, and the " +
+               "rule engine is authoritative here.";
+    } else if (ew.flagged) {
+      kind = "critical";
+      title = "Early-warning signal raised";
+      detail = "Score " + fmt(ew.score, 3) + " at or above the " + fmt(ew.cut, 3) +
+               " cut, roughly " + fmt(ew.est_lead_days, 0) + " days of lead time.";
+    } else if (firstFire) {
+      kind = "watch";
+      title = tierName(firstFire.tier) + " forecast in about " +
+              fmt(firstFire.days_ahead, 0) + " days";
+      detail = "Predicted systolic " + fmt(firstFire.sbp, 0) + " mmHg would fire " +
+               pretty(firstFire.rule_id) + " if the trend holds.";
+    } else if (eng.fired) {
+      kind = "watch";
+      title = tierName(eng.tier) + " on the latest reading";
+      detail = pretty(eng.rule_id) + ". No further breach is forecast.";
+    } else if (d.confidence_tier === "no_model") {
+      kind = "info"; title = "Rule engine only";
+      detail = "No model is loaded. Nothing fired on the latest reading.";
+    } else if (d.confidence_tier === "stale") {
+      kind = "info"; title = "History too old for a forecast"; detail = d.note || "";
+    } else if (d.confidence_tier === "cold_start") {
+      kind = "info"; title = "Cold start — no forecast issued"; detail = d.note || "";
+    } else {
+      detail = "The engine fired nothing, and the forecast stays below the personalised " +
+               "threshold of " + fmt(pers.threshold, 0) + " mmHg.";
+    }
+    var b = $("banner");
+    b.className = "banner is-" + kind;
+    b.innerHTML = glyph(kind) + "<div><h2>" + esc(title) + "</h2><p>" + esc(detail) + "</p></div>";
+  }
+
+  function tile(k, v, unit, sub, accent) {
+    return '<div class="tile' + (accent ? " accent-" + accent : "") + '">' +
+           '<div class="k">' + esc(k) + "</div>" +
+           '<div class="v">' + esc(v) + (unit ? '<span class="u">' + esc(unit) + "</span>" : "") +
+           "</div>" + (sub ? '<div class="sub">' + esc(sub) + "</div>" : "") + "</div>";
+  }
+
+  function renderTiles(d) {
+    var host = $("tiles");
+    var pers = d.personalisation || {}, ew = d.early_warning || {};
+    var sbp = ((d.forecast || {}).sbp || {}).h0 || {};
+    var bt = (d.backtest || {}).horizons || [];
+    var out = [];
+
+    if (sbp.point !== undefined) {
+      out.push(tile("Next session", fmt(sbp.point, 0), "mmHg",
+                    "in about " + fmt(sbp.days_ahead_est, 0) + " days"));
+    }
+    if (pers.threshold != null) {
+      out.push(tile("Alert threshold", fmt(pers.threshold, 0), "mmHg",
+                    (pers.offset >= 0 ? "+" : "") + fmt(pers.offset, 1) +
+                    " mmHg vs the population 140"));
+    }
+    if (ew.score != null) {
+      out.push(tile("Early-warning score", fmt(ew.score, 2), "",
+                    ew.flagged ? "above the " + fmt(ew.cut, 2) + " cut"
+                               : "below the " + fmt(ew.cut, 2) + " cut",
+                    ew.flagged ? "critical" : "good"));
+    }
+    if (bt.length) {
+      out.push(tile("Typical error", fmt(bt[0].mae, 1), "mmHg",
+                    fmt(bt[0].within_10 * 100, 0) + "% within 10 mmHg, next session"));
+    }
+    out.push(tile("Readings", fmt(d.n_observations, 0), "",
+                  (d.confidence_tier || "").replace("_", " ")));
+    host.innerHTML = out.join("");
+    host.hidden = !out.length;
+  }
+
+  /* Observed systolic and diastolic, the forecast continuing from the last reading, the
+   * personalised threshold and the emergency floor. One y-axis in mmHg -- never two. */
+  function renderTrend(d) {
+    var card = $("trend-card"), svg = $("trend-chart");
+    var hist = d.history || [];
+    var fsbp = (d.forecast || {}).sbp || {}, fdbp = (d.forecast || {}).dbp || {};
+    card.hidden = hist.length < 2;
+    if (card.hidden) return;
+    clear(svg);
+    Array.prototype.slice.call(svg.parentNode.querySelectorAll(".tip,[role=status]"))
+      .forEach(function (n) { n.remove(); });
+
+    var fkeys = Object.keys(fsbp).sort();
+    var sbpObs = hist.map(function (r) { return r.sbp; });
+    var dbpObs = hist.map(function (r) { return r.dbp; });
+    var fPts = fkeys.map(function (k) { return fsbp[k].point; });
+    var pers = (d.personalisation || {}).threshold;
+    var floor = (d.governance || {}).emergency_floor_mmHg;
+
+    // The right margin is a LABEL GUTTER, not padding: direct labels live outside the plot
+    // so they cannot land on the marks they name.
+    var GUT = 62;
+    var W = 940, H = 320, m = { l: 46, r: 16 + GUT, t: 14, b: 30 };
+    var iw = W - m.l - m.r, ih = H - m.t - m.b;
+    svg.setAttribute("viewBox", "0 0 " + W + " " + H);
+
+    var n = hist.length + fkeys.length;
+    var all = sbpObs.concat(dbpObs, fPts, [pers, floor].filter(function (x) { return x != null; }));
+    var dom = C.domain(all, 0.10);
+    var yMin = dom[0], yMax = dom[1];
+
+    /* Three forecast points among forty observed ones get 3/43 of the width on a plain index
+     * scale -- about sixty pixels for the part of the chart the reader actually came for. The
+     * forecast is given a fixed share instead, so it stays legible however long the history
+     * is. The scale break is not hidden: the shaded band marks exactly where it happens. */
+    var fShare = fkeys.length ? 0.24 : 0;
+    var iwH = iw * (1 - fShare);
+    function X(i) {
+      if (i < hist.length) {
+        return m.l + (hist.length <= 1 ? iwH / 2 : (i / (hist.length - 1)) * iwH);
+      }
+      return m.l + iwH + ((i - hist.length + 1) / fkeys.length) * (iw - iwH);
+    }
+    var Y = C.axes(svg, m, iw, ih, yMin, yMax, function (v) { return fmt(v, 0); }, 4);
+
+    // The forecast region, so "measured" and "predicted" are visually separable. Shaded in a
+    // NEUTRAL, because the band is a region of the x-axis, not a series -- painting it in a
+    // categorical hue would imply it carries an identity of its own.
+    if (fkeys.length) {
+      C.shadeBand(svg, X(hist.length - 1), X(n - 1), m, ih, C.cssVar("--axis"), "forecast");
+    }
+    C.refLine(svg, Y, floor, m, iw, C.cssVar("--critical"),
+              "emergency floor " + fmt(floor, 0), yMin, yMax, "left");
+    C.refLine(svg, Y, pers, m, iw, C.cssVar("--ink-muted"),
+              "alert threshold " + fmt(pers, 0), yMin, yMax, "left");
+
+    var s1 = C.cssVar("--series-1"), s3 = C.cssVar("--series-3");
+    C.line(svg, dbpObs.map(function (v, i) { return [X(i), Y(v)]; }), s3, { width: 2 });
+    C.line(svg, sbpObs.map(function (v, i) { return [X(i), Y(v)]; }), s1, { width: 2 });
+
+    /* Colour follows the ENTITY, so the forecast keeps its signal's hue and is marked
+     * predicted by the dash. Giving the forecast a hue of its own would say systolic-measured
+     * and systolic-forecast are two different things; they are one thing, half of it observed.
+     * The join starts at the last measurement so there is no gap at the handover. */
+    function drawForecast(per, obs, colour) {
+      var ks = Object.keys(per || {}).sort()
+        .filter(function (k) { return per[k] && isFinite(per[k].point); });
+      if (!ks.length || !obs.length) return ks;
+      var pts = [[X(hist.length - 1), Y(obs[obs.length - 1])]].concat(
+        ks.map(function (k, i) { return [X(hist.length + i), Y(per[k].point)]; }));
+      C.line(svg, pts, colour, { width: 2, dash: "6 4" });
+      C.dots(svg, pts.slice(1), colour, 3.5);
+      // The interval exists at one horizon only (only ("sbp", h1) has a fitted band). Drawn
+      // where it exists rather than implied everywhere by a smooth ribbon -- a band spanning
+      // horizons that were never given one would be a claim the bundle does not support.
+      ks.forEach(function (k, i) {
+        var nd = per[k];
+        if (nd.lo80 == null || nd.hi80 == null) return;
+        svg.appendChild(C.svgEl("line", {
+          x1: X(hist.length + i), x2: X(hist.length + i),
+          y1: Y(nd.hi80), y2: Y(nd.lo80), stroke: colour, "stroke-width": 6,
+          "stroke-linecap": "round", opacity: .22
+        }));
+      });
+      return ks;
+    }
+    drawForecast(fsbp, sbpObs, s1);
+    drawForecast(fdbp, dbpObs, s3);
+
+    /* Direct labels in the gutter, at the height each series ends on -- the relief rule for
+     * the aqua series, which measures 2.74:1 on the light surface, and quicker to read than a
+     * legend hunt. Nudged apart if the two series end within a label's height of each other. */
+    function lastY(per, obs) {
+      var ks = Object.keys(per || {}).sort();
+      var v = ks.length ? per[ks[ks.length - 1]].point : obs[obs.length - 1];
+      return Y(v);
+    }
+    if (sbpObs.length && dbpObs.length) {
+      var ys = lastY(fsbp, sbpObs), yd = lastY(fdbp, dbpObs);
+      if (Math.abs(ys - yd) < 13) { ys -= 7; yd += 7; }
+      [[ys, s1, "systolic"], [yd, s3, "diastolic"]].forEach(function (t) {
+        svg.appendChild(C.svgEl("text", {
+          x: m.l + iw + 8, y: t[0] + 4, fill: t[1], "font-size": 11.5, "font-weight": 600
+        }, t[2]));
+      });
+    }
+
+    C.xTicks(svg, m, ih, [0, Math.floor(hist.length / 2), hist.length - 1].filter(
+      function (v, i, a) { return a.indexOf(v) === i && v >= 0; }),
+      X, function (i) { return shortDate(hist[i].ts); });
+
+    C.hoverLayer(svg, svg.parentNode, m, iw, ih, n, X, Y,
+      function (i) {
+        return i < hist.length ? { y: hist[i].sbp, r: hist[i] }
+                               : { y: fsbp[fkeys[i - hist.length]].point, f: true };
+      },
+      function (i, v) {
+        return i < hist.length
+          ? shortDate(hist[i].ts) + " — " + fmt(hist[i].sbp, 0) + "/" + fmt(hist[i].dbp, 0) + " mmHg"
+          : "forecast " + fmt(v.y, 0) + " mmHg, session " + (i - hist.length + 1) + " ahead";
+      });
+
+    C.legendInto($("trend-legend"), [
+      { label: "Systolic", colour: s1 },
+      { label: "Diastolic", colour: s3 },
+      { label: "Forecast (dashed)", colour: C.cssVar("--ink-muted"), dash: true }
+    ]);
+    $("trend-hint").textContent = hist.length + " sessions";
+    $("trend-desc").textContent =
+      "Systolic and diastolic over " + hist.length + " sessions. To the right of the last " +
+      "measurement both signals continue as a dashed forecast; the vertical band on the " +
+      "systolic forecast is the 80% interval, shown only at the horizon where one is fitted.";
+
+    // Table view -- the relief rule for the aqua series, and the accessible equivalent of the
+    // chart. It is also where the interval and the coherence verdict live, neither of which
+    // the plot can carry legibly.
+    var NAME = { sbp: "Systolic", dbp: "Diastolic", idwg: "Weight gain" };
+    var tb = $("forecast-table").querySelector("tbody");
+    clear(tb);
+    ["sbp", "dbp", "idwg"].forEach(function (sig) {
+      var per = (d.forecast || {})[sig];
+      if (!per) return;
+      Object.keys(per).sort().forEach(function (k) {
+        var nd = per[k], co = nd.coherence || {};
+        var unit = sig === "idwg" ? " kg" : " mmHg";
+        var tr = document.createElement("tr");
+        tr.innerHTML =
+          "<td>" + NAME[sig] + "</td>" +
+          '<td class="num">' + fmt(nd.days_ahead_est, 0) + " d</td>" +
+          '<td class="num">' + fmt(nd.point, 1) + unit + "</td>" +
+          '<td class="num">' + (nd.lo80 != null
+            ? fmt(nd.lo80, 0) + " – " + fmt(nd.hi80, 0)
+            : '<span class="dim">not fitted here</span>') + "</td>" +
+          "<td>" + (co.ok === undefined ? "" : co.ok
+            ? pill("good", "coherent")
+            : pill("critical", (co.violations || [])[0] || "check failed")) + "</td>";
+        tb.appendChild(tr);
+      });
+    });
+
+    /* A signal that is in the bundle but could not be scored on this input must SAY so. If it
+     * simply vanished from the table, an absent weight-gain forecast would be indistinguishable
+     * from a model that never had one. */
+    var un = d.forecast_unavailable, note = $("forecast-missing");
+    if (un && (un.signals || []).length) {
+      note.hidden = false;
+      note.textContent = un.signals.map(function (s) { return NAME[s] || s; }).join(", ") +
+        (un.signals.length > 1 ? " could not be scored" : " could not be scored") +
+        " on this input. " + (un.note || "");
+    } else { note.hidden = true; }
+  }
+
+  function renderOutlook(d) {
+    var card = $("outlook-card");
+    var hz = (d.predicted_alert || {}).horizons || [];
+    card.hidden = !hz.length;
+    if (card.hidden) return;
+    var tb = $("outlook-table").querySelector("tbody");
+    clear(tb);
+    hz.forEach(function (h) {
+      var kind = h.fired ? tierKind(h.tier, h.is_emergency) : "good";
+      var word = h.fired ? tierName(h.tier) : "Nothing fires";
+      var tr = document.createElement("tr");
+      tr.innerHTML = '<td class="num">' + fmt(h.days_ahead, 0) + " d</td>" +
+                     '<td class="num">' + fmt(h.sbp, 0) +
+                     (h.dbp != null ? " / " + fmt(h.dbp, 0) : "") + "</td>" +
+                     "<td>" + pill(kind, word) +
+                     (h.fired ? ' <span class="caption">' + esc(pretty(h.rule_id)) + "</span>" : "") +
+                     "</td>";
+      tb.appendChild(tr);
+    });
+    $("outlook-note").textContent =
+      "Each forecast is re-evaluated by the same rule engine that judges a real reading.";
+  }
+
+  function renderRisk(d) {
+    var card = $("risk-card"), ew = d.early_warning || {}, an = d.anomaly || {};
+    card.hidden = ew.score == null;
+    if (card.hidden) return;
+
+    /* The detector score is NOT bounded to [0,1] -- `d_forecast_level` returns 1.08 on this
+     * fixture. Clamping to 1 would pin the bar at full and hide exactly the thing worth
+     * seeing: how far past the cut it sits. The track scales to the data instead. */
+    var hi = Math.max(1, ew.score || 0, ew.cut || 0) * 1.06;
+    var meter = $("risk-meter");
+    meter.className = "meter" + (ew.flagged ? " over" : "");
+    meter.querySelector(".fill").style.width =
+      (Math.max(0, Math.min(1, (ew.score || 0) / hi)) * 100).toFixed(1) + "%";
+    meter.querySelector(".cut").style.left =
+      (Math.max(0, Math.min(1, (ew.cut || 0) / hi)) * 100).toFixed(1) + "%";
+    meter.setAttribute("role", "meter");
+    meter.setAttribute("aria-valuenow", ew.score);
+    meter.setAttribute("aria-valuemin", 0);
+    meter.setAttribute("aria-valuemax", hi.toFixed(2));
+    meter.setAttribute("aria-label",
+      "early-warning score " + fmt(ew.score, 2) + " against a cut of " + fmt(ew.cut, 2));
+    $("risk-scale-max").textContent = fmt(hi, 1);
+    $("risk-cut-label").textContent = "cut " + fmt(ew.cut, 2) +
+      " · score " + fmt(ew.score, 2);
+    $("risk-hint").textContent = ew.detector || "";
+    $("risk-note").textContent =
+      (ew.event_definition ? ew.event_definition.charAt(0).toUpperCase() +
+        ew.event_definition.slice(1) + ". " : "") +
+      "The cut is set so roughly " + fmt(ew.budget_pct, 0) + "% of sessions are flagged.";
+
+    var pts = (an.points || []).filter(function (p) { return !p.warmup && isFinite(p.score); });
+    var svg = $("risk-chart");
+    clear(svg);
+    Array.prototype.slice.call(svg.parentNode.querySelectorAll(".tip,[role=status]"))
+      .forEach(function (n) { n.remove(); });
+    if (pts.length < 2) { $("risk-desc").textContent = ""; return; }
+
+    var W = 620, H = 190, m = { l: 40, r: 14, t: 14, b: 26 };
+    var iw = W - m.l - m.r, ih = H - m.t - m.b;
+    svg.setAttribute("viewBox", "0 0 " + W + " " + H);
+    var dom = C.domain(pts.map(function (p) { return p.score; }).concat([an.cut || 0]), 0.15);
+    var yMin = Math.max(0, dom[0]), yMax = dom[1];
+    function X(i) { return m.l + (i / (pts.length - 1)) * iw; }
+    var Y = C.axes(svg, m, iw, ih, yMin, yMax, function (v) { return fmt(v, 2); }, 2);
+    C.refLine(svg, Y, an.cut, m, iw, C.cssVar("--critical"), "cut", yMin, yMax);
+    C.line(svg, pts.map(function (p, i) { return [X(i), Y(p.score)]; }),
+           C.cssVar("--series-1"), { width: 2 });
+    var hot = pts.map(function (p, i) { return p.flagged ? [X(i), Y(p.score)] : null; })
+                 .filter(Boolean);
+    if (hot.length) C.dots(svg, hot, C.cssVar("--critical"), 3.5);
+    C.xTicks(svg, m, ih, [0, pts.length - 1], X, function (i) { return shortDate(pts[i].ts); });
+    C.hoverLayer(svg, svg.parentNode, m, iw, ih, pts.length, X, Y,
+      function (i) { return { y: pts[i].score }; },
+      function (i, v) {
+        return shortDate(pts[i].ts) + " — score " + fmt(v.y, 3) +
+               (pts[i].flagged ? ", flagged" : "");
+      });
+    $("risk-desc").textContent =
+      an.n_flagged + " of " + an.n_settled + " settled sessions scored above the cut.";
+  }
+
+  function renderEngine(d) {
+    var card = $("engine-card"), eng = d.rule_engine || {};
+    var hist = eng.history || [], readings = d.history || [];
+    card.hidden = !hist.length;
+    if (card.hidden) return;
+
+    var byDate = {};
+    readings.forEach(function (r) { byDate[String(r.ts).slice(0, 10)] = r; });
+
+    var tb = $("engine-table").querySelector("tbody");
+    clear(tb);
+    // Newest first: the latest verdict is the one being acted on.
+    hist.slice().reverse().slice(0, 14).forEach(function (h) {
+      var r = byDate[String(h.ts).slice(0, 10)] || {};
+      var kind = h.fired ? tierKind(h.tier, h.is_emergency) : "muted";
+      var word = tierName(h.tier);
+      var tr = document.createElement("tr");
+      tr.innerHTML = "<td>" + esc(shortDate(h.ts)) + "</td>" +
+                     '<td class="num">' + (r.sbp != null ? fmt(r.sbp, 0) + "/" + fmt(r.dbp, 0) : "–") + "</td>" +
+                     "<td>" + pill(kind, word) + "</td>" +
+                     '<td class="caption">' + (h.rule_id ? esc(pretty(h.rule_id)) : "") + "</td>";
+      tb.appendChild(tr);
+    });
+    $("engine-hint").textContent = eng.fired_count + " of " + hist.length + " sessions fired";
+    $("engine-note").textContent = eng.note || "";
+  }
+
+  /* The backtest is the most useful honest number on the page: the shipped forecaster
+   * replayed over this patient's own history, scored against what actually happened. */
+  function renderAccuracy(d) {
+    var card = $("accuracy-card"), bt = d.backtest || {};
+    var hz = bt.horizons || [], series = (bt.series || {}).h1 || [];
+    card.hidden = !hz.length;
+    if (card.hidden) return;
+
+    var tb = $("accuracy-table").querySelector("tbody");
+    clear(tb);
+    hz.forEach(function (h) {
+      var tr = document.createElement("tr");
+      tr.innerHTML = '<td class="num">' + fmt(h.days_ahead, 0) + " d</td>" +
+                     '<td class="num">' + fmt(h.n, 0) + "</td>" +
+                     '<td class="num">' + fmt(h.mae, 1) + " mmHg</td>" +
+                     '<td class="num">' + fmt(h.within_10 * 100, 0) + "%</td>";
+      tb.appendChild(tr);
+    });
+    $("accuracy-note").textContent = bt.caption || "";
+
+    var svg = $("accuracy-chart");
+    clear(svg);
+    Array.prototype.slice.call(svg.parentNode.querySelectorAll(".tip,[role=status]"))
+      .forEach(function (n) { n.remove(); });
+    if (series.length < 2) { $("accuracy-desc").textContent = ""; return; }
+
+    var W = 900, H = 220, m = { l: 46, r: 16, t: 12, b: 26 };
+    var iw = W - m.l - m.r, ih = H - m.t - m.b;
+    svg.setAttribute("viewBox", "0 0 " + W + " " + H);
+    var dom = C.domain(series.map(function (p) { return p.actual; })
+                       .concat(series.map(function (p) { return p.predicted; })), 0.12);
+    function X(i) { return m.l + (i / (series.length - 1)) * iw; }
+    var Y = C.axes(svg, m, iw, ih, dom[0], dom[1], function (v) { return fmt(v, 0); }, 3);
+    var s1 = C.cssVar("--series-1"), s2 = C.cssVar("--series-2");
+    C.line(svg, series.map(function (p, i) { return [X(i), Y(p.actual)]; }), s1, { width: 2 });
+    C.line(svg, series.map(function (p, i) { return [X(i), Y(p.predicted)]; }), s2,
+           { width: 2, dash: "5 4" });
+    C.xTicks(svg, m, ih, [0, Math.floor(series.length / 2), series.length - 1],
+             X, function (i) { return shortDate(series[i].ts); });
+    C.hoverLayer(svg, svg.parentNode, m, iw, ih, series.length, X, Y,
+      function (i) { return { y: series[i].actual }; },
+      function (i) {
+        var p = series[i];
+        return shortDate(p.ts) + " — actual " + fmt(p.actual, 0) +
+               ", predicted " + fmt(p.predicted, 0) + " (" +
+               (p.error >= 0 ? "+" : "") + fmt(p.error, 1) + ")";
+      });
+    C.legendInto($("accuracy-legend"), [
+      { label: "What happened", colour: s1 },
+      { label: "What the model said", colour: s2, dash: true }
+    ]);
+    $("accuracy-desc").textContent =
+      "Next-session forecast replayed over " + series.length +
+      " past sessions against the measured value.";
+  }
+
+  /* The chained block returns every head at every session -- 60+ rows. Rendering that flat is
+   * a data dump, not a read. Grouped by session, ranked, and split: the `mech_*`/`any`/
+   * `red_flag` aggregates are a different kind of thing from a named symptom and belong in
+   * their own row of summary chips rather than interleaved by probability.
+   *
+   * No row is flagged. `cut_applies` is false throughout -- the operating cut was chosen on
+   * observed rows and does not carry its alert-budget meaning here -- so this section ranks
+   * and describes, and never raises an alert. */
+  var AGG = { any: "Any symptom", red_flag: "Priority symptom", mech_hypertensive: "Pressure-driven",
+              mech_hypotensive: "Drop-driven", mech_volume: "Volume-driven", mech_drug: "Medication-driven" };
+  var TOP_N = 6;
+
+  function renderChain(d) {
+    var card = $("chain-card"), ch = d.symptom_chained;
+    card.hidden = !ch;
+    if (!ch) return;
+    var host = $("chain-body");
+    clear(host);
+    if (!ch.available) {
+      $("chain-hint").textContent = "";
+      $("chain-note").textContent = ch.reason || ch.session_1_note || "";
+      return;
+    }
+
+    var items = ch.items || [];
+    var sessions = (ch.sessions_ahead || []).slice().sort(function (a, b) { return a - b; });
+    var basis = ch.uncertainty_basis || {};
+
+    sessions.forEach(function (s) {
+      var mine = items.filter(function (it) { return it.sessions_ahead === s; });
+      if (!mine.length) return;
+      var named = mine.filter(function (it) { return !AGG[it.key]; })
+                      .sort(function (a, b) { return b.prob - a.prob; });
+      var aggs = mine.filter(function (it) { return AGG[it.key]; })
+                     .sort(function (a, b) { return b.prob - a.prob; });
+      var ref = mine[0];
+
+      var block = document.createElement("div");
+      block.className = "chain-block";
+      var head = "Session " + s + " ahead" +
+        (ref.days_ahead != null ? " · about " + fmt(ref.days_ahead, 0) + " days" : "");
+      // The marginalised probability and the point estimate differ only where a band exists;
+      // where they do, the gap IS the Jensen correction and is worth showing.
+      var gaps = mine.map(function (it) { return Math.abs(it.jensen_gap || 0); });
+      var maxGap = gaps.length ? Math.max.apply(null, gaps) : 0;
+
+      block.innerHTML =
+        '<div class="chain-head"><h4>' + esc(head) + "</h4>" +
+        '<span class="spacer"></span><span class="caption">conditioned on the forecast ' +
+        "through session " + esc(String(ref.conditioned_through_session)) + " (" +
+        fmt(ref.conditioned_through_sbp, 0) + " mmHg)</span></div>" +
+        '<div class="chips">' + aggs.map(function (it) {
+          return '<span class="chip-stat"><span class="cs-k">' + esc(AGG[it.key]) +
+                 '</span><span class="cs-v">' + fmt(it.prob * 100, 0) + "%</span></span>";
+        }).join("") + "</div>";
+
+      var wrap = document.createElement("div");
+      wrap.className = "table-wrap";
+      var t = document.createElement("table");
+      t.innerHTML = "<thead><tr><th>Most likely symptom</th><th>Driver</th>" +
+                    '<th class="num">Projected</th><th>Relative</th></tr></thead>';
+      var body = document.createElement("tbody");
+      var top = named.slice(0, TOP_N);
+      var scale = top.length ? top[0].prob : 1;
+      top.forEach(function (it) {
+        var tr = document.createElement("tr");
+        tr.innerHTML =
+          "<td>" + esc(pretty(it.key)) +
+          (it.red_flag ? " " + pill("critical", "priority") : "") + "</td>" +
+          '<td class="caption">' + esc(pretty(it.mechanism)) + "</td>" +
+          '<td class="num">' + fmt(it.prob * 100, 1) + "%" +
+          (Math.abs(it.jensen_gap || 0) >= 0.005
+            ? ' <span class="dim">(' + (it.jensen_gap > 0 ? "+" : "") +
+              fmt(it.jensen_gap * 100, 1) + ")</span>"
+            : "") + "</td>" +
+          '<td><span class="bar"><i style="width:' +
+          Math.max(2, (it.prob / (scale || 1)) * 100).toFixed(1) + '%"></i></span></td>';
+        body.appendChild(tr);
+      });
+      t.appendChild(body);
+      wrap.appendChild(t);
+      block.appendChild(wrap);
+
+      var foot = document.createElement("p");
+      foot.className = "caption";
+      foot.textContent =
+        (named.length > TOP_N ? "Showing the " + TOP_N + " highest of " + named.length +
+                                " symptoms. " : "") +
+        (basis[String(s)] || "") +
+        (maxGap >= 0.005 ? "" : "");
+      block.appendChild(foot);
+      host.appendChild(block);
+    });
+
+    $("chain-hint").textContent = ch.n_heads + " heads · sessions " + sessions.join(", ");
+    $("chain-note").textContent = [ch.reach_note, ch.conditioning_note, ch.cut_note,
+                                   ch.session_1_note].filter(Boolean).join(" ");
+  }
+
+  /* How much of the fitted model this request actually fed. The point is not the percentage
+   * -- it is the gap list, which turns "your forecast used 68% of the model" into a specific
+   * thing the user can go and supply. */
+  function renderCoverage(d) {
+    var card = $("coverage-card"), fc = d.feature_coverage;
+    card.hidden = !fc || fc.error || !fc.fitted;
+    if (card.hidden) return;
+
+    $("coverage-fill").style.width = Math.max(1, fc.pct).toFixed(1) + "%";
+    $("coverage-hint").textContent = fc.pct.toFixed(0) + "% of the fitted model";
+    $("coverage-headline").innerHTML =
+      "<strong>" + fc.resolved + " of " + fc.fitted + "</strong> inputs the model was " +
+      "trained on carried a value for this request" +
+      (fc.missing ? ", " + fc.missing + " did not." : ".");
+
+    var gaps = fc.gaps || [];
+    $("coverage-gaps-wrap").hidden = !gaps.length;
+    var tb = $("coverage-table").querySelector("tbody");
+    clear(tb);
+    gaps.forEach(function (g) {
+      var tr = document.createElement("tr");
+      // `how` carries backtick-quoted tokens from the API; rendered as code, escaped first.
+      tr.innerHTML = "<td>" + esc(g.supply) + "</td>" +
+                     '<td class="num">' + fmt(g.features, 0) + "</td>" +
+                     '<td class="caption">' +
+                     esc(g.how || "").replace(/`([^`]+)`/g, function (_, c) {
+                       return "<code>" + c + "</code>";
+                     }) + "</td>";
+      tb.appendChild(tr);
+    });
+
+    $("coverage-note").textContent =
+      (fc.needs_more_sessions
+        ? fc.needs_more_sessions + " more need a longer history rather than a new field — " +
+          "the 30-session windows fill in as sessions accumulate. "
+        : "") + (fc.note || "");
+  }
+
+  function renderGovernance(d) {
+    var card = $("governance-card"), g = d.governance || {};
+    var pers = d.personalisation || {};
+    card.hidden = !Object.keys(g).length;
+    if (card.hidden) return;
+    var rows = [
+      ["Emergency floor", fmt(g.emergency_floor_mmHg, 0) + " mmHg",
+       "never personalised, for any patient"],
+      ["Population threshold", fmt(g.population_threshold_mmHg, 0) + " mmHg",
+       "the starting point before personalisation"]
+    ];
+    if (pers.threshold != null) {
+      rows.push(["This patient's threshold", fmt(pers.threshold, 0) + " mmHg",
+                 "cohort " + (pers.cohort_key || "") +
+                 (pers.capped ? ", capped at the governance limit" : "")]);
+    }
+    if (d.model_version) rows.push(["Model", d.model_version, "serving this advisory"]);
+    var tb = $("governance-table").querySelector("tbody");
+    clear(tb);
+    rows.forEach(function (r) {
+      var tr = document.createElement("tr");
+      tr.innerHTML = "<th scope=\"row\" style=\"text-transform:none;font-size:13.5px;color:var(--ink)\">" +
+                     esc(r[0]) + "</th>" +
+                     '<td class="num">' + esc(r[1]) + "</td>" +
+                     '<td class="caption">' + esc(r[2]) + "</td>";
+      tb.appendChild(tr);
+    });
+  }
+
+  /* Each section in its own try: one renderer meeting an unexpected shape must not blank the
+   * page, and the console keeps the cause. */
+  function paint(d) {
+    [["banner", renderBanner], ["tiles", renderTiles], ["trend", renderTrend],
+     ["outlook", renderOutlook], ["risk", renderRisk], ["engine", renderEngine],
+     ["accuracy", renderAccuracy], ["chain", renderChain],
+     ["coverage", renderCoverage], ["governance", renderGovernance]].forEach(function (pair) {
+      try { pair[1](d); }
+      catch (e) { console.error("render " + pair[0] + " failed:", e); }
+    });
+  }
+
+  try {
+    var saved = localStorage.getItem("cp-theme");
+    if (saved) applyTheme(saved);
+  } catch (e) { /* private mode */ }
+  boot();
 })();

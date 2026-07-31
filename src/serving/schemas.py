@@ -34,6 +34,28 @@ class Reading(_Base):
     weight: float | None = Field(None, ge=_W_LO, le=_W_HI)
     idwg: float | None = Field(None, ge=-5, le=12)
     symptoms: list[str] = Field(default_factory=list)
+
+    #: Did the patient take every prescribed medication on this day?
+    #:
+    #: This is the ONE same-day quantity the causal contract admits: the forecast is for the
+    #: NEXT session, so today's adherence is genuinely known when the forecast is made. The
+    #: feature builder emits it as `adh_took_all_meds_today`, and leakage probe P7 asserts it
+    #: equals today rather than proxying tomorrow. Its lagged forms -- `took_all_meds_lag1`,
+    #: `_mean7`, `_mean30` -- read <= t-1 like everything else.
+    #:
+    #: `missed_antihypertensive` is NOT accepted here: training derives it as
+    #: `took_all_meds == 0 AND on any of on_ace/on_arb/on_bb`, so it is a function of this
+    #: field and the profile. Taking it from the client would let the two disagree.
+    took_all_meds: bool | None = None
+
+    #: Intradialytic session measurements. Absent for anyone not on dialysis, and absent for
+    #: most dialysis patients too -- a journaling app does not see the machine. They stay None
+    #: rather than 0 because zero ultrafiltration is a clinically meaningful and wrong claim.
+    #: Supplying them resolves uf_lag1 / uf_per_kg / uf_rate_* and the sbp_drop history.
+    uf_total: float | None = Field(None, ge=0, le=8, description="litres removed")
+    session_hours: float | None = Field(None, ge=0.5, le=12)
+    sbp_drop: float | None = Field(None, ge=-50, le=120,
+                                   description="pre- minus intradialytic-nadir systolic, mmHg")
     position: Literal["SITTING", "STANDING", "LYING"] = "SITTING"
     #: Confirmatory measurements. Load-bearing, not cosmetic: the engine gates every
     #: non-emergency rule behind n_meas >= 2, so a single unconfirmed reading is reported
@@ -79,12 +101,26 @@ class Profile(_Base):
     #: which is the honest state, not a reason to substitute the measured weight. Bounds match
     #: SCHEMA_RANGES["weight"].
     dryweight: float | None = Field(None, ge=25, le=220)
+    #: Date the patient started dialysis. The model was fitted on `vintage_years`, derived
+    #: from it; without this the feature is NaN on every request. Time on dialysis is one of
+    #: the stronger static predictors of pressure instability, so it is worth the one field.
+    first_dialysis: str | None = None
     missed_3d: int = Field(0, ge=0, le=3)
     adherence_7d: float = Field(1.0, ge=0.0, le=1.0)
     #: Where this history sits in the patient's real timeline. Without it a returning
     #: patient who pastes their last 20 readings looks like a patient at step 0-19, and
     #: RULE_FIRST_MONTH_ADHERENCE_NUDGE (step < 30) fires for everyone.
     step_offset: int = Field(0, ge=0, le=100_000)
+
+    @field_validator("first_dialysis")
+    @classmethod
+    def _parse_first_dialysis(cls, v):
+        if v is None:
+            return v
+        ts = pd.to_datetime(v, errors="coerce")
+        if pd.isna(ts):
+            raise ValueError(f"unparseable first_dialysis date {v!r}; use YYYY-MM-DD")
+        return str(pd.Timestamp(ts).normalize().date())
 
     @field_validator("conditions")
     @classmethod
@@ -120,6 +156,10 @@ class EnrichFlags(_Base):
     predicted_alert: bool = True
     anomaly: bool = True
     backtest: bool = True
+    #: How much of the fitted feature matrix this request resolved. Cheap -- it reuses the
+    #: frame the anomaly and backtest blocks already built -- and on by default, because a
+    #: silently half-fed model is the failure it exists to surface.
+    feature_coverage: bool = True
     symptom_risk: bool = True
     #: Score every horizon rather than just the next session. Off by default:
     #: the full set is 45 separate calibrated models scored one row at a time,

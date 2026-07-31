@@ -15,7 +15,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import json  # noqa: E402
+import re  # noqa: E402
 import warnings  # noqa: E402
+
+import pandas as pd  # noqa: E402
 
 warnings.filterwarnings("ignore")
 
@@ -56,18 +59,54 @@ def _parsing():
     for bad, why in (("2026-01-01, 140", "too few fields"),
                      ("nope, 140, 80", "unparseable date"),
                      ("", "empty input"),
-                     ("# only a comment", "no readings")):
+                     ("# only a comment", "no readings"),
+                     ("2026-01-01, 140, 80, w=heavy", "a non-numeric keyed value"),
+                     ("2026-01-01, 140, 80, meds=maybe", "a non-boolean meds="),
+                     ("2026-01-01, 140, 80, wieght=72", "a misspelled field name")):
         try:
             G.parse_readings(bad)
             chk(f"parser rejects {why}", False, f"accepted {bad!r}")
         except ValueError:
             chk(f"parser rejects {why}", True)
 
+    # The keyed tail. These are the per-session model inputs, so a token that parsed to the
+    # wrong field would be worse than one that failed loudly.
+    r = G.parse_readings("2026-01-01, 140, 80, 72, w=74.2, idwg=2.1, meds=n, uf=2.4, "
+                         "hrs=4, drop=18, sym=dizziness+fatigue")[0]
+    for k, v in (("weight", 74.2), ("idwg", 2.1), ("took_all_meds", False),
+                 ("uf_total", 2.4), ("session_hours", 4.0), ("sbp_drop", 18.0),
+                 ("pulse", 72.0)):
+        chk(f"parser reads {k} from the keyed tail", r.get(k) == v, f"{k}={r.get(k)!r}")
+    chk("parser splits sym= on +", r.get("symptoms") == ["dizziness", "fatigue"],
+        r.get("symptoms"))
+    chk("    meds=y is the other boolean",
+        G.parse_readings("2026-01-01, 140, 80, meds=y")[0]["took_all_meds"] is True)
+    chk("    a line with no keyed tail is unchanged",
+        set(G.parse_readings("2026-01-01, 140, 80")[0]) == {"date", "sbp", "dbp"})
+    # The SPA and the Space must accept the SAME history, or one paste gives two different
+    # forecasts depending on which front end the user opened. Read out of app.js rather than
+    # restated, so the two lists cannot be edited apart.
+    js = (Path(__file__).resolve().parents[1] / "static" / "app.js").read_text(encoding="utf-8")
+    js_tokens = set(re.findall(r"(\w+):\s*\[", js.split("var TOKENS = {")[1].split("};")[0]))
+    chk("*** both front ends accept the same reading-line tokens ***",
+        set(G.TOKENS) == js_tokens, f"space={sorted(G.TOKENS)} spa={sorted(js_tokens)}")
+    chk("    (control) the SPA token list was actually extracted",
+        {"w", "idwg", "uf"} <= js_tokens, sorted(js_tokens))
+
 
 def _rendering():
-    b, tiles, fc, chart, eng, sym, chain, raw = call()
-    chk("assess returns the 8 outputs the UI declares",
-        all(x is not None for x in (b, tiles, fc, chart, eng, sym, chain, raw)))
+    b, tiles, fc, chart, eng, sym, chain, cov, raw = call()
+    chk("assess returns the outputs the UI declares",
+        all(x is not None for x in (b, tiles, fc, chart, eng, sym, chain, cov, raw)))
+    # Width is asserted against the declared count rather than a literal, because every error
+    # path pads to it -- one of them used to pad to seven against eight components, which
+    # paired the raw-JSON pane with a table and showed nothing wrong.
+    chk("every error path returns exactly as many outputs as the UI declares",
+        all(len(G._error("x")) == G._N_OUTPUTS for _ in (0,))
+        and len(call("garbage")) == G._N_OUTPUTS, len(call("garbage")))
+    chk("    the coverage table names the fitted-input count",
+        "features" in getattr(cov, "columns", []) or "note" in getattr(cov, "columns", []),
+        list(getattr(cov, "columns", [])))
     chk("banner is rendered HTML", b.startswith("<div") and "</div>" in b)
     chk("engine table has one row per reading",
         len(eng) == len(G.parse_readings(G.SAMPLE)), f"{len(eng)} rows")
@@ -137,7 +176,11 @@ def _forecast_node_contract():
 def _clinical():
     # The claim the whole degraded path rests on: an emergency reading is an emergency with
     # no model on disk. Paired with a normal history so a green result cannot be vacuous.
-    hi = G.SAMPLE.rsplit("\n", 1)[0] + "\n2026-06-03, 195, 100"
+    # Derived from the sample, not hardcoded: the literal date silently became a DUPLICATE
+    # when the sample was extended, the schema rejected the whole request, and this check was
+    # then measuring the validation path while still claiming to measure the emergency one.
+    last_ts = pd.Timestamp(G.parse_readings(G.SAMPLE)[-1]["date"])
+    hi = G.SAMPLE + f"\n{(last_ts + pd.Timedelta(days=2)).date()}, 195, 100"
     b_hi, *_, raw_hi = call(hi)
     b_ok, *_, raw_ok = call()
     cur_hi = (raw_hi.get("rule_engine") or {}).get("current") or {}

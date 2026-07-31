@@ -23,7 +23,7 @@
 
   /* Grid, y ticks and the y scale. Returns Y(value) -> pixel. */
   function axes(svg, m, iw, ih, yMin, yMax, fmt, ticks) {
-    var grid = cssVar("--grid"), axis = cssVar("--axis"), muted = cssVar("--text-muted");
+    var grid = cssVar("--grid"), axis = cssVar("--axis"), muted = cssVar("--ink-muted");
     var span = (yMax - yMin) || 1;
     function Y(v) { return m.t + ih - ((v - yMin) / span) * ih; }
     for (var i = 0; i <= ticks; i++) {
@@ -40,7 +40,7 @@
   }
 
   function xTicks(svg, m, ih, indices, X, labelFn) {
-    var muted = cssVar("--text-muted");
+    var muted = cssVar("--ink-muted");
     indices.forEach(function (i) {
       svg.appendChild(svgEl("text", { x: X(i), y: m.t + ih + 18, "text-anchor": "middle",
                                       fill: muted, "font-size": 10.5 }, labelFn(i)));
@@ -49,15 +49,19 @@
 
   /* A horizontal reference line (threshold, cut, emergency floor). No-ops off-domain, so a
    * caller never has to check whether the line is visible before asking for it. */
-  function refLine(svg, Y, value, m, iw, colour, label, yMin, yMax) {
+  function refLine(svg, Y, value, m, iw, colour, label, yMin, yMax, side) {
     if (value === null || value === undefined || !isFinite(value)) return;
     if (value < yMin || value > yMax) return;
     var y = Y(value);
     svg.appendChild(svgEl("line", { x1: m.l, x2: m.l + iw, y1: y, y2: y, stroke: colour,
                                     "stroke-width": 1.5, "stroke-dasharray": "5 4",
                                     opacity: .9 }));
+    // `side` exists because the right edge is where a chart's direct series labels live; a
+    // reference label defaulting there collides with them on every dense chart.
     if (label) {
-      svg.appendChild(svgEl("text", { x: m.l + iw - 3, y: y - 5, "text-anchor": "end",
+      var left = side === "left";
+      svg.appendChild(svgEl("text", { x: left ? m.l + 4 : m.l + iw - 3, y: y - 5,
+                                      "text-anchor": left ? "start" : "end",
                                       fill: colour, "font-size": 10.5 }, label));
     }
   }
@@ -104,10 +108,18 @@
     var dot = svgEl("circle", { r: 4, fill: s1, opacity: 0 });
     svg.appendChild(cross); svg.appendChild(dot);
 
-    var tip = document.createElement("div");
-    tip.setAttribute("role", "status");
-    tip.className = "sr-only";
-    host.appendChild(tip);
+    // Two tips, deliberately. `live` is the screen-reader channel; `vis` is the one everyone
+    // else reads. The earlier version shipped only the first, so a sighted user hovering a
+    // chart got a crosshair and no number.
+    var live = document.createElement("div");
+    live.setAttribute("role", "status");
+    live.className = "sr-only";
+    host.appendChild(live);
+    var vis = document.createElement("div");
+    vis.className = "tip";
+    vis.style.opacity = "0";
+    host.appendChild(vis);
+    var tip = { set textContent(v) { live.textContent = v; } };
 
     var hit = svgEl("rect", { x: m.l, y: m.t, width: iw, height: ih, fill: "transparent",
                               tabindex: 0, role: "application",
@@ -123,10 +135,21 @@
       var x = X(i), y = Y(v.y);
       cross.setAttribute("x1", x); cross.setAttribute("x2", x); cross.setAttribute("opacity", .55);
       dot.setAttribute("cx", x); dot.setAttribute("cy", y); dot.setAttribute("opacity", 1);
-      tip.textContent = describe(i, v);
+      var text = describe(i, v);
+      tip.textContent = text;
+      vis.textContent = text;
+      vis.style.opacity = "1";
+      // Positioned in host space from the viewBox, so it tracks the mark at any width.
+      var box = svg.getBoundingClientRect();
+      var sc = box.width / (svg.viewBox.baseVal.width || 1);
+      var left = x * sc, top = y * sc;
+      vis.style.left = Math.max(4, Math.min(box.width - vis.offsetWidth - 4,
+                                            left - vis.offsetWidth / 2)) + "px";
+      vis.style.top = Math.max(2, top - vis.offsetHeight - 12) + "px";
     }
     function hide() {
-      cross.setAttribute("opacity", 0); dot.setAttribute("opacity", 0); tip.textContent = "";
+      cross.setAttribute("opacity", 0); dot.setAttribute("opacity", 0);
+      tip.textContent = ""; vis.style.opacity = "0";
     }
     hit.addEventListener("mousemove", function (ev) {
       var box = svg.getBoundingClientRect();
@@ -150,9 +173,9 @@
     host.innerHTML = "";
     items.forEach(function (it) {
       var k = document.createElement("span");
-      k.className = "k";
+      k.className = "item";
       var sw = document.createElement("span");
-      sw.className = "sw" + (it.dash ? " dash" : "");
+      sw.className = "swatch" + (it.dash ? " dash" : "");
       if (it.colour) sw.style.background = it.dash
         ? "repeating-linear-gradient(90deg," + it.colour + " 0 5px,transparent 5px 9px)"
         : it.colour;

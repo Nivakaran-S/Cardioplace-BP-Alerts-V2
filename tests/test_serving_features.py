@@ -2,9 +2,10 @@
 
 A feature can be missing at serving in two very different ways:
 
-  * **Honestly NaN** -- the user cannot supply it. `sbp_drop` and `uf_total` are intradialytic
-    measurements; a journaling app has no access to them. That is a real train/serve shift, it
-    is disclosed, and `missingness_sweep` quantifies it.
+  * **Honestly NaN** -- the user did not supply it. `sbp_drop` and `uf_total` are intradialytic
+    measurements a journaling app has no access to, so they are absent on most requests. They
+    are now ACCEPTED when a caller does have them, which makes the distinction sharper rather
+    than softer: NaN must mean "not submitted", never "submitted and dropped".
 
   * **Accidentally absent** -- the user DID supply it and the mapping dropped it. This is a bug,
     and it is invisible: `_one_series` skips columns it cannot find, `reindex` fills the gap with
@@ -42,24 +43,33 @@ def chk(name, cond, extra=""):
         FAILS.append(name)
 
 
-def build_request(*, symptoms=True, pulse=True, dryweight=True, n=60):
+def build_request(*, symptoms=True, pulse=True, dryweight=True, session=True,
+                  clinical=True, vitals=True, n=60):
     rows, d = [], datetime.date(2026, 2, 2)
     for i in range(n):
-        r = {"date": d.isoformat(), "sbp": 138 + (i % 7) * 3 - (i % 3), "dbp": 78 + i % 5,
-             # idwg is submitted so the dry-weight-derived features have their other input;
-             # idwg_rel needs BOTH and would stay NaN on idwg alone.
-             "idwg": round(1.6 + (i % 5) * 0.3, 2), "weight": round(71.0 + (i % 5) * 0.3, 2)}
+        r = {"date": d.isoformat(), "sbp": 138 + (i % 7) * 3 - (i % 3), "dbp": 78 + i % 5}
+        if vitals:
+            # idwg is submitted so the dry-weight-derived features have their other input;
+            # idwg_rel needs BOTH and would stay NaN on idwg alone.
+            r.update({"idwg": round(1.6 + (i % 5) * 0.3, 2),
+                      "weight": round(71.0 + (i % 5) * 0.3, 2)})
         if pulse:
             r["pulse"] = 68 + (i % 11)
         if symptoms and i % 4 == 0:
             r["symptoms"] = ["dizziness", "sob"]
         if symptoms and i % 13 == 0:
             r["symptoms"] = ["syncope"]                     # a training red flag
+        if session:
+            r.update({"took_all_meds": i % 4 != 0, "uf_total": round(2.1 + (i % 4) * 0.1, 2),
+                      "session_hours": 4.0, "sbp_drop": 14.0 + (i % 6)})
         rows.append(r)
         d += datetime.timedelta(days=2)
     prof = {"age": 68.0, "is_male": 1}
     if dryweight:
         prof["dryweight"] = 71.0
+    if clinical:
+        prof.update({"conditions": ["has_hf", "has_cad"], "medications": ["on_ace", "on_bb"],
+                     "first_dialysis": "2019-03-01"})
     return PredictRequest(patient_id="feat-1", readings=rows, profile=prof)
 
 
@@ -129,7 +139,10 @@ def _control_no_symptoms():
 
 
 def _honestly_absent_stay_absent():
-    row = feature_row(build_request())
+    # session=False on purpose: these columns are now ACCEPTED, so the question is no longer
+    # "can they exist" but "does NaN still mean not-submitted". A fixture that supplied them
+    # would make this assert the opposite of what it says.
+    row = feature_row(build_request(session=False))
     for c in HONESTLY_ABSENT:
         if c not in row.columns:
             chk(f"{c} is not fabricated", True)
@@ -216,6 +229,64 @@ def _coverage():
           + (" ..." if len(empty) > 12 else ""))
 
 
+def _bundle_coverage():
+    """The claim this whole change rests on: a complete request feeds the WHOLE model.
+
+    Measured against the shipped bundle's own `feature_names`, not against the columns the
+    builder happens to emit -- those are a superset and would make the number look better than
+    it is. Skipped, loudly, when no bundle is on disk.
+    """
+    from src.serving.model_registry import ModelRegistry
+    reg = ModelRegistry()
+    reg.refresh(force=True)
+    P = reg.predictor
+    if P is None:
+        print("  SKIP    no bundle on disk; cannot measure against a fitted feature list")
+        return
+    feats = list(P.b["feature_names"])
+
+    def missing(req):
+        row = feature_row(req).reindex(columns=feats)
+        return [c for c in feats if not np.isfinite(row[c].iloc[0])]
+
+    full = missing(build_request())
+    chk("*** a complete request resolves every fitted feature ***",
+        not full, f"{len(full)} still NaN: {sorted(full)[:10]}")
+
+    # The control is the whole point: if the bare request ALSO resolved everything, the check
+    # above would be passing for free and telling us nothing about the mapping.
+    bare = missing(build_request(symptoms=False, pulse=False, dryweight=False,
+                                 session=False, clinical=False, vitals=False))
+    chk("    (control) a bare request leaves many unresolved",
+        len(bare) > 40, f"only {len(bare)} NaN -- the completeness check may be vacuous")
+    print(f"  INFO    bare request: {len(feats) - len(bare)}/{len(feats)} resolved; "
+          f"complete request: {len(feats) - len(full)}/{len(feats)}")
+
+    # Each input group must be individually load-bearing, or the API is asking for a field
+    # that changes nothing.
+    for label, kw in (("per-session weight and adherence", {"session": False}),
+                      ("conditions, medications and vintage", {"clinical": False}),
+                      ("dry weight", {"dryweight": False}),
+                      ("pulse", {"pulse": False}),
+                      ("per-reading weight and idwg", {"vitals": False})):
+        got = missing(build_request(**kw))
+        chk(f"    withholding {label} costs features", len(got) > len(full),
+            f"{len(got)} vs {len(full)}")
+
+    # Symptoms are the exception, and the difference matters: they are emitted as 0/1 for
+    # every reading, so withholding them changes the VALUES rather than the NaN count. A
+    # not-reported symptom is information. Asserted on the values for that reason.
+    with_s = feature_row(build_request()).reindex(columns=feats).iloc[0]
+    without_s = feature_row(build_request(symptoms=False)).reindex(columns=feats).iloc[0]
+    sym_cols = [c for c in feats if c.startswith("sym_")]
+    moved = [c for c in sym_cols if with_s[c] != without_s[c]]
+    chk("    withholding symptoms changes the symptom features (0/1, never NaN)",
+        len(moved) >= 5, f"{len(moved)} of {len(sym_cols)} moved")
+    chk("    and they stay finite either way -- not-reported is 0, not missing",
+        all(np.isfinite(without_s[c]) for c in sym_cols),
+        [c for c in sym_cols if not np.isfinite(without_s[c])][:5])
+
+
 def run():
     for title, fn in (("submitted features arrive", _submitted_features_arrive),
                       ("values are correct", _values_are_right),
@@ -223,7 +294,8 @@ def run():
                       ("honestly absent stay absent", _honestly_absent_stay_absent),
                       ("dry weight", _dryweight),
                       ("shared feature row", _shared_row),
-                      ("coverage", _coverage)):
+                      ("coverage", _coverage),
+                      ("bundle coverage", _bundle_coverage)):
         print(f"\n--- {title} ---")
         fn()
     print("\n" + ("ALL SERVING FEATURE TESTS PASSED" if not FAILS

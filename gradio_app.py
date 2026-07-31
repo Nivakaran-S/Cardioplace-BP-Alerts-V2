@@ -78,30 +78,68 @@ SEV_COLOUR = {"critical": ("#b3261e", "#fdeceb"), "watch": ("#8a5300", "#fff6e5"
 _TARGET_LO = 100
 _TARGET_HI = int(EMERGENCY_FLOOR_MMHG) - 1
 
-SAMPLE = """2026-05-01, 136, 78
-2026-05-04, 139, 80
-2026-05-06, 141, 79
-2026-05-08, 138, 77
-2026-05-11, 144, 82
-2026-05-13, 142, 80
-2026-05-15, 147, 83
-2026-05-18, 145, 81
-2026-05-20, 150, 84
-2026-05-22, 148, 82
-2026-05-25, 152, 85
-2026-05-27, 149, 83
-2026-05-29, 155, 86
-2026-06-01, 153, 84
-2026-06-03, 158, 87"""
+SAMPLE = """2026-03-31, 138, 78, 74, w=73.4, idwg=1.90, meds=n, uf=2.2, hrs=4
+2026-04-02, 140, 79, 75, w=73.7, idwg=2.05, meds=y, uf=2.3, hrs=4
+2026-04-04, 142, 80, 76, w=74.0, idwg=2.20, meds=y, uf=2.4, hrs=4
+2026-04-06, 147, 81, 77, w=74.3, idwg=2.35, meds=y, uf=2.5, hrs=4
+2026-04-08, 149, 82, 78, w=74.6, idwg=2.50, meds=y, uf=2.2, hrs=4
+2026-04-10, 152, 78, 79, w=74.9, idwg=2.65, meds=n, uf=2.3, hrs=4
+2026-04-12, 157, 79, 80, w=73.4, idwg=1.90, meds=y, uf=2.4, hrs=4
+2026-04-14, 138, 80, 81, w=73.7, idwg=2.05, meds=y, uf=2.5, hrs=4
+2026-04-16, 140, 81, 82, w=74.0, idwg=2.20, meds=y, uf=2.2, hrs=4
+2026-04-18, 145, 82, 74, w=74.3, idwg=2.35, meds=y, uf=2.3, hrs=4
+2026-04-20, 147, 78, 75, w=74.6, idwg=2.50, meds=n, uf=2.4, hrs=4
+2026-04-22, 149, 79, 76, w=74.9, idwg=2.65, meds=y, uf=2.5, hrs=4
+2026-04-24, 155, 80, 77, w=73.4, idwg=1.90, meds=y, uf=2.2, hrs=4
+2026-04-26, 157, 81, 78, w=73.7, idwg=2.05, meds=y, uf=2.3, hrs=4
+2026-04-28, 138, 82, 79, w=74.0, idwg=2.20, meds=y, uf=2.4, hrs=4
+2026-04-30, 143, 78, 80, w=74.3, idwg=2.35, meds=n, uf=2.5, hrs=4
+2026-05-02, 145, 79, 81, w=74.6, idwg=2.50, meds=y, uf=2.2, hrs=4
+2026-05-04, 147, 80, 82, w=74.9, idwg=2.65, meds=y, uf=2.3, hrs=4
+2026-05-06, 152, 81, 74, w=73.4, idwg=1.90, meds=y, uf=2.4, hrs=4
+2026-05-08, 154, 82, 75, w=73.7, idwg=2.05, meds=y, uf=2.5, hrs=4
+2026-05-10, 156, 78, 76, w=74.0, idwg=2.20, meds=n, uf=2.2, hrs=4
+2026-05-12, 141, 79, 77, w=74.3, idwg=2.35, meds=y, uf=2.3, hrs=4
+2026-05-14, 143, 80, 78, w=74.6, idwg=2.50, meds=y, uf=2.4, hrs=4
+2026-05-16, 145, 81, 79, w=74.9, idwg=2.65, meds=y, uf=2.5, hrs=4
+2026-05-18, 150, 82, 80, w=73.4, idwg=1.90, meds=y, uf=2.2, hrs=4
+2026-05-20, 152, 78, 81, w=73.7, idwg=2.05, meds=n, uf=2.3, hrs=4
+2026-05-22, 154, 79, 82, w=74.0, idwg=2.20, meds=y, uf=2.4, hrs=4
+2026-05-24, 159, 80, 74, w=74.3, idwg=2.35, meds=y, uf=2.5, hrs=4
+2026-05-26, 141, 81, 75, w=74.6, idwg=2.50, meds=y, uf=2.2, hrs=4
+2026-05-28, 143, 82, 76, w=74.9, idwg=2.65, meds=y, uf=2.3, hrs=4
+2026-05-30, 148, 78, 77, w=73.4, idwg=1.90, meds=n, uf=2.4, hrs=4
+2026-06-01, 150, 79, 78, w=73.7, idwg=2.05, meds=y, uf=2.5, hrs=4
+2026-06-03, 152, 80, 79, w=74.0, idwg=2.20, meds=y, uf=2.2, hrs=4
+2026-06-05, 157, 81, 80, w=74.3, idwg=2.35, meds=y, uf=2.3, hrs=4
+2026-06-07, 159, 82, 81, w=74.6, idwg=2.50, meds=y, uf=2.4, hrs=4
+2026-06-09, 140, 78, 82, w=74.9, idwg=2.65, meds=n, uf=2.5, hrs=4
+2026-06-11, 145, 79, 74, w=73.4, idwg=1.90, meds=y, uf=2.2, hrs=4
+2026-06-13, 148, 80, 75, w=73.7, idwg=2.05, meds=y, uf=2.3, hrs=4
+2026-06-15, 150, 81, 76, w=74.0, idwg=2.20, meds=y, uf=2.4, hrs=4
+2026-06-17, 155, 82, 77, w=74.3, idwg=2.35, meds=y, uf=2.5, hrs=4"""
 
 
 # --------------------------------------------------------------------------- parsing
 
+#: `key=` token -> the `Reading` field it fills. Mirrors `TOKENS` in `static/app.js`: the two
+#: front ends must accept the same history, or the same paste produces a different forecast
+#: depending on which one the user opened.
+TOKENS = {"w": "weight", "weight": "weight", "idwg": "idwg", "uf": "uf_total",
+          "hrs": "session_hours", "drop": "sbp_drop"}
+
+
 def parse_readings(text: str) -> list[dict]:
-    """`date, sbp, dbp [, pulse]` per line. Blank lines and `#` comments ignored.
+    """`date, sbp, dbp [, pulse]` per line, then any number of `key=value` tokens.
+
+    The keyed tail is how the per-session inputs the model was fitted on get in: weight and
+    same-day adherence change between sessions, and their lagged and rolling forms are 45 of
+    the 175 selected features. Supplying them as profile constants would be a different, and
+    wrong, statement about the patient.
 
     Raises ValueError with the offending line number. A silent skip would let a typo drop a
-    reading out of the history without anyone noticing it went missing.
+    reading out of the history without anyone noticing it went missing -- and an ignored
+    unknown key would let someone believe they had supplied a field they had not.
     """
     rows = []
     for i, raw in enumerate(text.splitlines(), 1):
@@ -109,15 +147,39 @@ def parse_readings(text: str) -> list[dict]:
         if not line or line.startswith("#"):
             continue
         parts = [p.strip() for p in re.split(r"[,\t;]+", line) if p.strip()]
-        if len(parts) < 3:
+        pos = [p for p in parts if "=" not in p]
+        kv = [p for p in parts if "=" in p]
+        if len(pos) < 3:
             raise ValueError(f"line {i}: expected `date, sbp, dbp`, got {raw!r}")
         try:
-            row = {"date": str(pd.Timestamp(parts[0]).date()),
-                   "sbp": int(round(float(parts[1]))), "dbp": int(round(float(parts[2])))}
+            row = {"date": str(pd.Timestamp(pos[0]).date()),
+                   "sbp": int(round(float(pos[1]))), "dbp": int(round(float(pos[2])))}
         except Exception as exc:                                      # noqa: BLE001
             raise ValueError(f"line {i}: {exc}") from exc
-        if len(parts) > 3:
-            row["pulse"] = float(parts[3])
+        if len(pos) > 3:
+            try:
+                row["pulse"] = float(pos[3])
+            except ValueError as exc:
+                raise ValueError(f"line {i}: pulse must be a number") from exc
+
+        for tok in kv:
+            k, _, v = tok.partition("=")
+            k, v = k.strip().lower(), v.strip()
+            if k == "meds":
+                if v.lower() not in {"y", "yes", "1", "n", "no", "0"}:
+                    raise ValueError(f"line {i}: meds= must be y or n, got {v!r}")
+                row["took_all_meds"] = v.lower() in {"y", "yes", "1"}
+            elif k == "sym":
+                # `+`-joined, so the token survives the comma split above.
+                row["symptoms"] = [s.strip() for s in v.split("+") if s.strip()]
+            elif k in TOKENS:
+                try:
+                    row[TOKENS[k]] = float(v)
+                except ValueError as exc:
+                    raise ValueError(f"line {i}: {k}= must be a number") from exc
+            else:
+                known = ", ".join(sorted([*TOKENS, "meds", "sym"]))
+                raise ValueError(f"line {i}: unknown field {k!r}. Known: {known}")
         rows.append(row)
     if not rows:
         raise ValueError("no readings entered")
@@ -271,6 +333,24 @@ def chained_frame(d: dict) -> pd.DataFrame:
     } for i in items])
 
 
+def coverage_frame(d: dict) -> pd.DataFrame:
+    """Which fitted inputs this request left empty, and how to supply them.
+
+    A NaN feature does not raise -- the estimator consumes it natively -- so without this a
+    forecast built from two thirds of the model looks exactly like one built from all of it.
+    """
+    blk = d.get("feature_coverage") or {}
+    if not blk.get("fitted"):
+        return pd.DataFrame({"note": [blk.get("error") or "no model loaded"]})
+    gaps = blk.get("gaps") or []
+    head = (f"{blk['resolved']} of {blk['fitted']} inputs carried a value "
+            f"({blk['pct']}%)")
+    if not gaps:
+        return pd.DataFrame([{"not supplied": "—", "features": 0, "how to supply it": head}])
+    return pd.DataFrame([{"not supplied": g["supply"], "features": g["features"],
+                          "how to supply it": g["how"].replace("`", "")} for g in gaps])
+
+
 def symptom_frame(d: dict) -> pd.DataFrame:
     blk = d.get("symptom_risk") or {}
     items = blk.get("items") or []
@@ -289,15 +369,26 @@ def symptom_frame(d: dict) -> pd.DataFrame:
 
 # --------------------------------------------------------------------------- callback
 
+#: The outputs `assess` returns, in the order `build_demo` wires them. Hand-counting the
+#: padding on each error path is how they drift: one return already carried seven `empty`
+#: slots against eight declared components, so Gradio paired the raw-JSON pane with a table.
+_N_OUTPUTS = 9
+
+
+def _error(html: str) -> tuple:
+    """An error banner plus a blank slot for every other output, whatever the count is."""
+    empty = pd.DataFrame()
+    return (f'<div style="color:#b3261e;font-weight:600">{html}</div>', "",
+            *([empty] * (_N_OUTPUTS - 3)), {})
+
+
 def assess(readings_text, patient_id, age, sex, diabetic, pregnant, hf_type, provider_target,
            conditions, medications, symptoms, position, missed_3d, adherence_7d,
-           chained=False):
-    empty = pd.DataFrame()
+           chained=False, dryweight=None, first_dialysis=None):
     try:
         rows = parse_readings(readings_text)
     except ValueError as exc:
-        return (f'<div style="color:#b3261e;font-weight:600">Could not read the history — '
-                f'{exc}</div>', "", empty, empty, empty, empty, empty, {})
+        return _error(f"Could not read the history — {exc}")
 
     # Symptoms and position are per-READING, not per-profile: the schema models what the
     # patient felt at a given measurement. The form asks "right now", so they attach to the
@@ -323,13 +414,19 @@ def assess(readings_text, patient_id, age, sex, diabetic, pregnant, hf_type, pro
     }
     # Falsy covers both ways this optional field arrives empty: None from the initial render,
     # and 0 from a box the user cleared. Neither is a target of 0 mmHg.
+    # Both feed the model rather than the engine. Dry weight turns the raw weights in the
+    # history into idwg_rel and uf_rate; the first-dialysis date is what vintage_years is
+    # derived from. Without them those features are NaN however complete the history is.
+    if dryweight:
+        profile["dryweight"] = float(dryweight)
+    if first_dialysis:
+        profile["first_dialysis"] = str(first_dialysis)
     if provider_target:
         if not _TARGET_LO <= float(provider_target) <= _TARGET_HI:
-            return (f'<div style="color:#b3261e;font-weight:600">Provider target SBP must be '
-                    f'between {_TARGET_LO} and {_TARGET_HI} mmHg, or left blank — '
-                    f'got {_num(provider_target, 0)}. The {_num(EMERGENCY_FLOOR_MMHG, 0)} '
-                    f'emergency floor is never personalised.</div>',
-                    "", empty, empty, empty, empty, {})
+            return _error(
+                f"Provider target SBP must be between {_TARGET_LO} and {_TARGET_HI} mmHg, "
+                f"or left blank — got {_num(provider_target, 0)}. The "
+                f"{_num(EMERGENCY_FLOOR_MMHG, 0)} emergency floor is never personalised.")
         profile["provider_target"] = float(provider_target)
 
     try:
@@ -339,9 +436,7 @@ def assess(readings_text, patient_id, age, sex, diabetic, pregnant, hf_type, pro
     except ValidationError as exc:
         first = exc.errors()[0]
         loc = ".".join(str(x) for x in first.get("loc", []))
-        return (f'<div style="color:#b3261e;font-weight:600">Rejected by validation — '
-                f'{loc}: {first.get("msg")}</div>', "", empty, empty, empty, empty, empty,
-                {})
+        return _error(f"Rejected by validation — {loc}: {first.get('msg')}")
 
     REGISTRY.refresh()
     try:
@@ -349,11 +444,10 @@ def assess(readings_text, patient_id, age, sex, diabetic, pregnant, hf_type, pro
                            degraded_reason=REGISTRY.health()["detail"])
     except Exception as exc:                                          # noqa: BLE001
         logging.exception("space assessment failed")
-        return (f'<div style="color:#b3261e;font-weight:600">Scoring failed — '
-                f'{type(exc).__name__}</div>', "", empty, empty, empty, empty, empty, {})
+        return _error(f"Scoring failed — {type(exc).__name__}")
 
     return (banner_html(d), tiles_md(d), forecast_frame(d), chart_frame(d, rows),
-            engine_frame(d, rows), symptom_frame(d), chained_frame(d),
+            engine_frame(d, rows), symptom_frame(d), chained_frame(d), coverage_frame(d),
             to_jsonable(d))
 
 
@@ -390,14 +484,6 @@ Only the systolic and weight-gain drivers are forecast, so the four hypotensive-
 symptoms — dizziness, syncope, palpitations, fatigue — gain nothing from this view, and
 diastolic pressure does not enter the symptom model at all.
 """
-
-SYNTH_WARNING = """
-> ⚠️ **Symptom labels are synthetic.** The HEMOBP corpus carries no symptom columns, so the
-> symptom heads were trained on labels generated by a structural causal model. Every number
-> in this section describes that generator, **not** any observed patient outcome. It is shown
-> because hiding it would be worse, not because it is evidence.
-"""
-
 
 def build_demo():
     with gr.Blocks(title="Cardioplace BP Alerts", theme=gr.themes.Soft(),
@@ -450,6 +536,14 @@ def build_demo():
                     conditions = gr.CheckboxGroup(list(CONDITIONS), label="Conditions")
                     medications = gr.CheckboxGroup(list(MEDICATIONS), label="Medications")
                     with gr.Row():
+                        dryweight = gr.Number(
+                            label="Dry weight (kg)", value=None,
+                            info="Turns the w= weights in the history into idwg_rel and "
+                                 "uf_rate. Without it those features are NaN.")
+                        first_dialysis = gr.Textbox(
+                            label="First dialysis (YYYY-MM-DD)", value="",
+                            info="What vintage_years is derived from.")
+                    with gr.Row():
                         missed_3d = gr.Slider(0, 3, value=0, step=1,
                                               label="Doses missed in the last 3 days")
                         adherence_7d = gr.Slider(0, 100, value=100, step=5,
@@ -487,34 +581,42 @@ def build_demo():
                     gr.Markdown(f"*{BLOCKED_NOTE}*" if BLOCKED_NOTE else "")
                     eng_tbl = gr.Dataframe(wrap=True)
                 with gr.Tab("Symptom risk"):
-                    gr.Markdown(SYNTH_WARNING)
                     gr.Markdown("**Today** — the heads scored on the observed history.")
                     sym_tbl = gr.Dataframe(wrap=True)
                 with gr.Tab("Predicted symptoms"):
-                    gr.Markdown(SYNTH_WARNING)
                     gr.Markdown(CHAIN_NOTE)
                     chain_tbl = gr.Dataframe(wrap=True)
+                with gr.Tab("Model inputs"):
+                    gr.Markdown(
+                        "Which of the inputs the forecaster was fitted on carried a value "
+                        "for this request. A missing one does not raise -- the estimator "
+                        "consumes it as missing -- so the forecast is still returned, "
+                        "computed from the rest.")
+                    cov_tbl = gr.Dataframe(wrap=True)
                 with gr.Tab("Raw response"):
                     gr.Markdown("Identical to the `POST /api/predict` body — same function.")
                     raw = gr.JSON()
 
         # Several CheckboxGroups, one flat symptom list: merge at call time rather than
         # threading a nested structure through the callback signature.
-        def _assess(rt, pid, ag, sx, dm, pg, hf, pt, cond, med, pos, m3, a7, ch,
+        def _assess(rt, pid, ag, sx, dm, pg, hf, pt, cond, med, pos, m3, a7, ch, dw, fd,
                     *sym_groups):
             flat = [s for grp in sym_groups for s in (grp or [])]
-            return assess(rt, pid, ag, sx, dm, pg, hf, pt, cond, med, flat, pos, m3, a7, ch)
+            return assess(rt, pid, ag, sx, dm, pg, hf, pt, cond, med, flat, pos, m3, a7, ch,
+                          dw, fd)
 
         go.click(_assess,
                  inputs=[readings, patient_id, age, sex, diabetic, pregnant, hf_type,
                          provider_target, conditions, medications, position, missed_3d,
-                         adherence_7d, chained, *sym_boxes],
-                 outputs=[banner, tiles, fc_tbl, chart, eng_tbl, sym_tbl, chain_tbl, raw])
+                         adherence_7d, chained, dryweight, first_dialysis, *sym_boxes],
+                 outputs=[banner, tiles, fc_tbl, chart, eng_tbl, sym_tbl, chain_tbl, cov_tbl,
+                          raw])
         demo.load(_assess,
                   inputs=[readings, patient_id, age, sex, diabetic, pregnant, hf_type,
                           provider_target, conditions, medications, position, missed_3d,
-                          adherence_7d, chained, *sym_boxes],
-                  outputs=[banner, tiles, fc_tbl, chart, eng_tbl, sym_tbl, chain_tbl, raw])
+                          adherence_7d, chained, dryweight, first_dialysis, *sym_boxes],
+                  outputs=[banner, tiles, fc_tbl, chart, eng_tbl, sym_tbl, chain_tbl, cov_tbl,
+                           raw])
     return demo
 
 

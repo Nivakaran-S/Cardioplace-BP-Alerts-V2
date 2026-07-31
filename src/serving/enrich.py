@@ -256,6 +256,97 @@ def backtest_block(predictor, F) -> dict:
         return {"horizons": [], "series": {}, "error": f"{type(exc).__name__}: {exc}"}
 
 
+# ------------------------------------------------------------------ feature coverage
+
+#: Feature-name stem -> (what the caller supplies, where). Only groups a caller can DO
+#: something about appear here; anything else is reported under its own stem with no advice,
+#: which is more honest than inventing one.
+_COVERAGE_ADVICE = {
+    "idwg": ("weight gain per session", "`idwg=` on each reading, or `w=` plus a dry weight"),
+    "idwg_rel": ("weight gain per session", "`idwg=` plus the profile dry weight"),
+    "weight": ("weight per session", "`w=` on each reading"),
+    "took_all_meds": ("same-day medication adherence", "`meds=y` or `meds=n` on each reading"),
+    "missed_antihypertensive": ("same-day medication adherence",
+                                "`meds=` on each reading, plus the medication list"),
+    "uf": ("fluid removed per session", "`uf=` on each reading"),
+    "uf_rate": ("fluid removal rate", "`uf=` and `hrs=` on each reading, plus a dry weight"),
+    "uf_per_kg": ("fluid removed per session", "`uf=` on each reading, plus a dry weight"),
+    "sbp_drop": ("intradialytic pressure fall", "`drop=` on each reading"),
+    "heart_rate": ("pulse", "a fourth number on each reading"),
+    "vintage_years": ("time on dialysis", "the first-dialysis date"),
+    "has_hf": ("clinical conditions", "the conditions checklist"),
+    "has_ihd": ("clinical conditions", "the conditions checklist"),
+    "has_afib": ("clinical conditions", "the conditions checklist"),
+}
+_MED_STEMS = ("on_ace", "on_arb", "on_bb", "on_loop", "on_nsaid")
+
+#: Windows that simply need more sessions. Nothing the caller can supply fixes these, so they
+#: are reported separately -- listing them as "missing input" would send someone hunting for a
+#: field that does not exist.
+_WINDOW_SUFFIXES = ("_z", "_slope30", "_slope24", "_mean30", "_std30", "_min30", "_max30",
+                    "_range30", "_base_std", "_base_mean")
+
+
+def _stem(col: str) -> str:
+    for suf in ("_lag1", "_lag2", "_lag3", "_lag5", "_lag7", "_lag14", "_d1", "_d2", "_z",
+                "_mean3", "_mean7", "_mean30", "_std3", "_std7", "_std30", "_range3",
+                "_range7", "_range14", "_range30", "_rate30", "_ewm0.3", "_base_mean",
+                "_base_std", "_vol_ratio", "_min3", "_max3", "_min7", "_max7", "_min14",
+                "_max14", "_min30", "_max30", "_slope3", "_slope7", "_slope14", "_slope24",
+                "_slope30", "_cv7", "_per_kg", "_ewm_resid", "_excess_base", "_delta_base"):
+        if col.endswith(suf):
+            return col[: -len(suf)]
+    return col
+
+
+def feature_coverage_block(predictor, F) -> dict:
+    """How much of the fitted feature matrix this request actually resolved.
+
+    A NaN feature does not raise and does not log -- HistGradientBoosting consumes it
+    natively -- so a request that supplies half the inputs returns a confident-looking
+    forecast built on half a model. This block is the only thing that makes that visible.
+
+    It is measured on the LAST row, because that is the row the forecast is made from; the
+    rows behind it may legitimately be short of history. No feature build of its own: `F` is
+    already in hand for the anomaly and backtest blocks.
+    """
+    try:
+        cols = list(predictor.b["feature_names"])
+        row = F.reindex(columns=cols).iloc[-1]
+        missing = [c for c in cols if pd.isna(row[c])]
+
+        needs_input, needs_history = {}, []
+        for c in missing:
+            st = _stem(c)
+            if st in _COVERAGE_ADVICE or st in _MED_STEMS:
+                what, how = _COVERAGE_ADVICE.get(
+                    st, ("prescribed medications", "the medications checklist"))
+                needs_input.setdefault((what, how), []).append(c)
+            elif c.endswith(_WINDOW_SUFFIXES):
+                needs_history.append(c)
+            else:
+                needs_input.setdefault((_stem(c), ""), []).append(c)
+
+        gaps = sorted(
+            ({"supply": what, "how": how, "features": len(cs),
+              "examples": sorted(cs)[:4]} for (what, how), cs in needs_input.items()),
+            key=lambda g: -g["features"])
+        return {
+            "fitted": len(cols),
+            "resolved": len(cols) - len(missing),
+            "missing": len(missing),
+            "pct": round(100.0 * (len(cols) - len(missing)) / max(len(cols), 1), 1),
+            "gaps": gaps,
+            "needs_more_sessions": len(needs_history),
+            "note": ("Features the model was fitted on that carry no value for this request. "
+                     "They do not raise -- the estimator consumes them as missing -- so the "
+                     "forecast is still returned, computed from the rest."),
+        }
+    except Exception as exc:                                          # noqa: BLE001
+        logging.exception("feature coverage block failed")
+        return {"error": f"{type(exc).__name__}: {exc}"}
+
+
 # --------------------------------------------------------------------- symptom risk
 
 def symptom_block(predictor, history, as_of=None, full: bool = False,
