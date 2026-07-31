@@ -89,17 +89,6 @@ def test_safety_gates():
     assert good.promotable, good.critical_failures
     assert not good.critical_failures
 
-    # Gate 5 (subgroup parity) was REMOVED as a gate by instruction on 2026-07-31. It is
-    # still measured -- run_fairness writes fairness.csv with every slice, and slices outside
-    # the margin are logged at WARNING -- but it no longer blocks promotion, so it is
-    # deliberately absent from the must-be-able-to-fail list below. The metric itself stays
-    # under test in test_slice_gate.py. Asserted rather than assumed, so a future edit that
-    # quietly reinstates or fully deletes it has to come past this line.
-    assert "subgroup parity" not in set(good.frame().gate), \
-        "subgroup parity should no longer appear as a gate"
-    assert good.promotable, "removing the fairness gate must not have broken promotability"
-    print("\n  subgroup parity: removed as a gate by instruction; fairness.csv still written")
-
     print("\n--- each critical gate must be able to FAIL ---")
     cases = {
         "emergency floor": dict(OFF=OFF.assign(threshold=OFF.threshold.where(
@@ -109,6 +98,7 @@ def test_safety_gates():
         # floor and fires on ~87% of sessions in this cohort by design.
         "detector alert budget": dict(detector_alert_rate=0.40),
         "emergency parity": dict(alerts_pers=alerts_pers.assign(is_emergency=False)),
+        "fairness": dict(fairness=fairness.assign(passes=False)),
         "zero explanation": dict(explanation={"sbp_lag1": 0.0, "sbp_z": 0.0}),
         "ood rate": dict(ood_rate=0.9),
         "learned offset floor": dict(offset_learned_max=195.0),

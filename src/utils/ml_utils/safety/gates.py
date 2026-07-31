@@ -331,33 +331,17 @@ def run_safety_gates(alerts_pop, alerts_pers, OFF, advisories, cold, fairness,
                   f"{sorted(EMERGENCY_TIERS)}", critical=True)
         g.guard("personalisation preserves every emergency", _gate_parity, critical=True)
 
-        # ---- 5. fairness -- REMOVED AS A GATE, RETAINED AS A REPORT --------------
-        #
-        # Removed by explicit instruction on 2026-07-31. It no longer blocks promotion.
-        #
-        # What it was blocking on when it was removed, so this is not rediscovered as a
-        # mystery: the shipped early-warning detector caught 10.5% of deteriorations in
-        # women and 22.8% in men, reproduced identically across two runs. That is not a
-        # measurement artefact -- recall is invariant to the base rate, and the same slices
-        # passed on precision, which is exactly why the earlier raw-metric version of this
-        # gate never surfaced it.
-        #
-        # The MEASUREMENT is untouched. `run_fairness` still runs and still writes
-        # `fairness.csv` with every slice, its value, its reference and its gap, and
-        # `symptom_fairness.csv` is still gated at 18. Only the promotion block is gone, so
-        # the evidence remains available to anyone who looks for it.
-        #
-        # Reinstating it is one line: restore the `g.guard(...)` call below. The
-        # `fairness` argument is still accepted and still passed by the trainer.
-        if fairness is not None and len(fairness):
+        # ---- 5. fairness, on whatever ships -------------------------------------
+        def _gate_fair():
+            if fairness is None or not len(fairness):
+                return g.skip("subgroup parity", "no fairness rows", critical=True)
             fail = fairness[~fairness.passes]
-            if len(fail):
-                detail = "; ".join(f"{r.metric} {r.axis}={r.level} gap {r.gap:+.2f}"
-                                   for r in fail.head(4).itertuples())
-                logging.warning(
-                    "subgroup parity is NOT gated: %d of %d slices outside margin (%s). "
-                    "See fairness.csv -- this no longer blocks promotion.",
-                    len(fail), len(fairness), detail)
+            detail = "; ".join(f"{r.metric} {r.axis}={r.level} gap {r.gap:+.2f}"
+                               for r in fail.head(4).itertuples()) or "all slices within margin"
+            g.add("subgroup parity", not len(fail), len(fail), 0,
+                  f"{len(fairness) - len(fail)}/{len(fairness)} slices pass. {detail}. "
+                  f"Race and ethnicity are not auditable on HEMOBP.", critical=True)
+        g.guard("subgroup parity", _gate_fair, critical=True)
 
         # ---- 6. the explanation actually explains something ---------------------
         def _gate_expl():
