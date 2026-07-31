@@ -187,7 +187,12 @@ def run():
     with open(".gitignore") as fh:
         gi = fh.read()
     chk(".gitignore covers data / Artifacts / logs / final_model",
-        all(x in gi for x in ["data/", "Artifacts/", "logs/", "final_model/"]))
+        all(x in gi for x in ["data/", "Artifacts/", "logs/", "final_model/*"]))
+    # The promoted bundle is the one exception: tracked through LFS so a fresh checkout can
+    # serve without a training run first. The rest of final_model/ stays ignored.
+    chk("final_model/model.pkl is un-ignored and LFS-tracked",
+        "!final_model/model.pkl" in gi
+        and "final_model/*.pkl filter=lfs" in open(".gitattributes", encoding="utf-8").read())
     chk("old SPA deleted",
         not any(os.path.exists(p) for p in ["templates/app.js", "templates/style.css"]))
 

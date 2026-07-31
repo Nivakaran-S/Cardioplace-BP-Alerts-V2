@@ -1,1 +1,5 @@
 data/*.csv filter=lfs diff=lfs merge=lfs -text
+# The promoted serving bundle. 88 MB of pickled sklearn objects -- LFS for the same
+# reason vip.csv uses it: a binary that changes wholesale every retrain would otherwise
+# add its full size to the pack on every commit.
+final_model/*.pkl filter=lfs diff=lfs merge=lfs -text

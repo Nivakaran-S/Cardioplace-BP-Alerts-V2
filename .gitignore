@@ -20,7 +20,10 @@ wheels/
 # Pipeline outputs. All reproducible from `python main.py`.
 Artifacts/
 logs/
-final_model/
+# `final_model/*` and not `final_model/`: git cannot re-include a file whose parent
+# DIRECTORY is excluded, so the trailing-slash form would make the negation below silently
+# do nothing. Excluding the contents instead leaves the directory itself visible.
+final_model/*
 cache/
 mlruns/
 *.joblib
@@ -30,3 +33,9 @@ mlruns/
 
 # Local Claude Code tool-permission state, not project configuration.
 .claude/
+
+# The promoted serving bundle, tracked through LFS so a fresh checkout can serve without a
+# six-hour training run. This must be the LAST word on the subject: gitignore is
+# last-match-wins, and both `final_model/*` above and the blanket `*.pkl` would otherwise
+# beat it. Verified with `git check-ignore -v final_model/model.pkl`.
+!final_model/model.pkl
