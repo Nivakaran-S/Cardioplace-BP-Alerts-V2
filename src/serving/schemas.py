@@ -52,9 +52,17 @@ class Reading(_Base):
     #: most dialysis patients too -- a journaling app does not see the machine. They stay None
     #: rather than 0 because zero ultrafiltration is a clinically meaningful and wrong claim.
     #: Supplying them resolves uf_lag1 / uf_per_kg / uf_rate_* and the sbp_drop history.
-    uf_total: float | None = Field(None, ge=0, le=8, description="litres removed")
-    session_hours: float | None = Field(None, ge=0.5, le=12)
-    sbp_drop: float | None = Field(None, ge=-50, le=120,
+    #:
+    #: Bounds are taken from the corpus these features were fitted on, not guessed. A first
+    #: pass used `session_hours >= 0.5` and `sbp_drop <= 120`, which rejected 0.33% and 0.12%
+    #: of real held-out sessions -- and a 422 on a genuine reading is worse than a wide bound,
+    #: because it drops the whole request rather than one field. Measured range over the
+    #: held-out split: session_hours [0, 13.67], uf_total [0, 3.0], sbp_drop [0, 139].
+    #: `uf_rate` guards `session_hours > 0` itself, so zero is accepted and simply derives
+    #: nothing.
+    uf_total: float | None = Field(None, ge=0, le=10, description="litres removed")
+    session_hours: float | None = Field(None, ge=0, le=24)
+    sbp_drop: float | None = Field(None, ge=-50, le=150,
                                    description="pre- minus intradialytic-nadir systolic, mmHg")
     position: Literal["SITTING", "STANDING", "LYING"] = "SITTING"
     #: Confirmatory measurements. Load-bearing, not cosmetic: the engine gates every
