@@ -67,6 +67,9 @@ for s in VOCAB["symptoms"]:
     SYM_BY_GROUP.setdefault(s["group"], []).append(s)
 SYM_LABEL_TO_KEY = {f"{s['label']}{' ⚑' if s['red_flag'] else ''}": s["key"]
                     for s in VOCAB["symptoms"]}
+#: Read from the vocabulary rather than restated, so the `pos=` token and the dropdown
+#: cannot accept different sets from the one `schemas.Reading` validates.
+POSITIONS = [str(p).upper() for p in VOCAB["positions"]]
 
 SEV_COLOUR = {"critical": ("#b3261e", "#fdeceb"), "watch": ("#8a5300", "#fff6e5"),
               "info": ("#1b5e8a", "#e9f3fa"), "good": ("#1c6b3f", "#e8f5ed")}
@@ -80,44 +83,37 @@ _TARGET_HI = int(EMERGENCY_FLOOR_MMHG) - 1
 
 SAMPLE = """2026-03-31, 138, 78, 74, w=73.4, meds=n
 2026-04-02, 140, 79, 75, w=73.7, meds=y
-2026-04-04, 142, 80, 76, w=74.0, meds=y
+2026-04-04, 142, 80, 76, w=74.0, meds=y, sym=dizziness
 2026-04-06, 147, 81, 77, w=74.3, meds=y
-2026-04-08, 149, 82, 78, w=74.6, meds=y
-2026-04-10, 152, 78, 79, w=74.9, meds=n
+2026-04-08, 149, 82, 78, w=74.6, meds=y, sym=fatigue+palpitations
+2026-04-10, 152, 78, 79, w=74.9, meds=n, pos=STANDING
 2026-04-12, 157, 79, 80, w=73.4, meds=y
-2026-04-14, 138, 80, 81, w=73.7, meds=y
-2026-04-16, 140, 81, 82, w=74.0, meds=y
+2026-04-14, 138, 80, 81, w=73.7, meds=y, sym=leg_swelling+sob
+2026-04-16, 140, 81, 82, w=74.0, meds=y, sym=dizziness
 2026-04-18, 145, 82, 74, w=74.3, meds=y
 2026-04-20, 147, 78, 75, w=74.6, meds=n
-2026-04-22, 149, 79, 76, w=74.9, meds=y
+2026-04-22, 149, 79, 76, w=74.9, meds=y, pos=LYING
 2026-04-24, 155, 80, 77, w=73.4, meds=y
-2026-04-26, 157, 81, 78, w=73.7, meds=y
-2026-04-28, 138, 82, 79, w=74.0, meds=y
+2026-04-26, 157, 81, 78, w=73.7, meds=y, sym=fatigue+palpitations, pos=STANDING
+2026-04-28, 138, 82, 79, w=74.0, meds=y, sym=dizziness
 2026-04-30, 143, 78, 80, w=74.3, meds=n
 2026-05-02, 145, 79, 81, w=74.6, meds=y
 2026-05-04, 147, 80, 82, w=74.9, meds=y
-2026-05-06, 152, 81, 74, w=73.4, meds=y
+2026-05-06, 152, 81, 74, w=73.4, meds=y, sym=leg_swelling+sob
 2026-05-08, 154, 82, 75, w=73.7, meds=y
-2026-05-10, 156, 78, 76, w=74.0, meds=n
-2026-05-12, 141, 79, 77, w=74.3, meds=y
-2026-05-14, 143, 80, 78, w=74.6, meds=y
+2026-05-10, 156, 78, 76, w=74.0, meds=n, sym=dizziness
+2026-05-12, 141, 79, 77, w=74.3, meds=y, pos=STANDING
+2026-05-14, 143, 80, 78, w=74.6, meds=y, sym=fatigue+palpitations
 2026-05-16, 145, 81, 79, w=74.9, meds=y
-2026-05-18, 150, 82, 80, w=73.4, meds=y
+2026-05-18, 150, 82, 80, w=73.4, meds=y, pos=LYING
 2026-05-20, 152, 78, 81, w=73.7, meds=n
-2026-05-22, 154, 79, 82, w=74.0, meds=y
+2026-05-22, 154, 79, 82, w=74.0, meds=y, sym=dizziness
 2026-05-24, 159, 80, 74, w=74.3, meds=y
 2026-05-26, 141, 81, 75, w=74.6, meds=y
-2026-05-28, 143, 82, 76, w=74.9, meds=y
+2026-05-28, 143, 82, 76, w=74.9, meds=y, sym=leg_swelling+sob, pos=STANDING
 2026-05-30, 148, 78, 77, w=73.4, meds=n
-2026-06-01, 150, 79, 78, w=73.7, meds=y
-2026-06-03, 152, 80, 79, w=74.0, meds=y
-2026-06-05, 157, 81, 80, w=74.3, meds=y
-2026-06-07, 159, 82, 81, w=74.6, meds=y
-2026-06-09, 140, 78, 82, w=74.9, meds=n
-2026-06-11, 145, 79, 74, w=73.4, meds=y
-2026-06-13, 148, 80, 75, w=73.7, meds=y
-2026-06-15, 150, 81, 76, w=74.0, meds=y
-2026-06-17, 155, 82, 77, w=74.3, meds=y"""
+2026-06-01, 150, 79, 78, w=73.7, meds=y, sym=fatigue+palpitations
+2026-06-03, 152, 80, 79, w=74.0, meds=y, sym=dizziness"""
 
 
 # --------------------------------------------------------------------------- parsing
@@ -171,13 +167,22 @@ def parse_readings(text: str) -> list[dict]:
             elif k == "sym":
                 # `+`-joined, so the token survives the comma split above.
                 row["symptoms"] = [s.strip() for s in v.split("+") if s.strip()]
+            elif k == "pos":
+                # Per READING: posture belongs to the measurement, not the patient, and
+                # RULE_ORTHOSTATIC reads it off the row it fires from. The dropdown below
+                # can only describe the newest reading, so this is the only way to say a
+                # patient was standing three sessions ago.
+                if v.upper() not in POSITIONS:
+                    raise ValueError(f"line {i}: pos= must be one of "
+                                     f"{', '.join(POSITIONS)}, got {v!r}")
+                row["position"] = v.upper()
             elif k in TOKENS:
                 try:
                     row[TOKENS[k]] = float(v)
                 except ValueError as exc:
                     raise ValueError(f"line {i}: {k}= must be a number") from exc
             else:
-                known = ", ".join(sorted([*TOKENS, "meds", "sym"]))
+                known = ", ".join(sorted([*TOKENS, "meds", "sym", "pos"]))
                 raise ValueError(f"line {i}: unknown field {k!r}. Known: {known}")
         rows.append(row)
     if not rows:
@@ -416,7 +421,11 @@ def assess(readings_text, patient_id, age, sex, diabetic, pregnant, hf_type, pro
     # record that was never reported.
     sym_keys = [SYM_LABEL_TO_KEY[s] for s in (symptoms or []) if s in SYM_LABEL_TO_KEY]
     rows[-1]["symptoms"] = sym_keys
-    rows[-1]["position"] = position or "SITTING"
+    # `pos=` on the line wins. The dropdown can only describe the newest reading, so
+    # overwriting a posture the user typed against that row would discard the more specific
+    # statement -- and silently, since both are valid values.
+    if "position" not in rows[-1]:
+        rows[-1]["position"] = position or "SITTING"
 
     cond_keys = [CONDITIONS[c] for c in (conditions or []) if c in CONDITIONS]
     profile = {
@@ -512,9 +521,14 @@ def build_demo():
                 gr.Markdown("### Reading history")
                 readings = gr.Textbox(
                     value=SAMPLE, lines=12, max_lines=24, label="",
-                    info="One reading per line: date, systolic, diastolic [, pulse]")
+                    # The keyed tail is documented here because it is the only place the
+                    # per-reading fields can be set. Posture and symptoms belong to the
+                    # measurement, and the controls below can only describe the newest one.
+                    info=("One reading per line: date, systolic, diastolic [, pulse], then "
+                          "any of  w=kg  meds=y|n  sym=a+b  pos=" + "|".join(POSITIONS)))
                 with gr.Row():
                     patient_id = gr.Textbox("space-user", label="Patient ID", scale=2)
+                    # Fallback for the newest reading only; a `pos=` token on that line wins.
                     position = gr.Dropdown(VOCAB["positions"], value="SITTING",
                                            label="Position", scale=1)
 

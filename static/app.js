@@ -110,14 +110,25 @@
 
   /* 40 sessions, because the `_z` and `_slope30` features need a 30-session window and a
    * shorter sample leaves them NaN -- the demo would then understate what the model does. */
+  // The demo history exercises every per-reading token, not just the numeric ones: symptoms
+  // and posture belong to the measurement, and a sample that omitted them taught the format
+  // by example as though they did not exist. Symptoms are the non-red-flag ones on purpose --
+  // the demo should show the symptom card populating, not open on a false emergency.
   var SAMPLE = (function () {
     var out = [], d = new Date(2026, 3, 1);
     for (var i = 0; i < 40; i++) {
       var sbp = 138 + (i % 7) * 3 - (i % 3) + Math.round(i / 8);
-      out.push(d.toISOString().slice(0, 10) + ", " + sbp + ", " + (78 + (i % 5)) +
-               ", " + (74 + (i % 9)) +
-               ", w=" + (73.4 + (i % 6) * 0.3).toFixed(1) +
-               ", meds=" + (i % 5 === 0 ? "n" : "y"));
+      var line = d.toISOString().slice(0, 10) + ", " + sbp + ", " + (78 + (i % 5)) +
+                 ", " + (74 + (i % 9)) +
+                 ", w=" + (73.4 + (i % 6) * 0.3).toFixed(1) +
+                 ", meds=" + (i % 5 === 0 ? "n" : "y");
+      var sym = i % 6 === 2 ? "dizziness"
+              : i % 9 === 4 ? "fatigue+palpitations"
+              : i % 11 === 7 ? "leg_swelling+sob" : null;
+      if (sym) { line += ", sym=" + sym; }
+      if (i % 8 === 5) { line += ", pos=STANDING"; }
+      else if (i % 13 === 11) { line += ", pos=LYING"; }
+      out.push(line);
       d.setDate(d.getDate() + 2);
     }
     return out.join("\n");
@@ -150,6 +161,11 @@
       if (st && (VOCAB.symptoms || []).length) {
         st.textContent = VOCAB.symptoms.map(function (s) { return s.key; }).join(", ");
       }
+      if ((VOCAB.positions || []).length) {
+        POSITIONS = VOCAB.positions.slice();
+      }
+      var pt = $("pos-tokens");
+      if (pt) { pt.textContent = POSITIONS.join(", ") + " — defaults to SITTING"; }
     } catch (e) { /* the form still works with the free-text fields alone */ }
     refreshHealth();
   }
@@ -182,6 +198,9 @@
    * the same reason: a mistyped `weight=` that silently did nothing would produce a confident
    * forecast built on a feature the user believes they supplied. */
   var TOKENS = { w: ["weight", "kg"], weight: ["weight", "kg"] };
+  //: Filled from /api/schema so the accepted set cannot drift from what the API validates;
+  //: seeded with the schema's own Literal so a failed vocabulary fetch still parses `pos=`.
+  var POSITIONS = ["SITTING", "STANDING", "LYING"];
 
   function parseReadings(text) {
     var rows = [];
@@ -218,10 +237,23 @@
           r.symptoms = v.split("+").map(function (s) { return s.trim(); }).filter(Boolean);
           return;
         }
+        if (k === "pos") {
+          // Per READING, because posture is a property of the measurement, not the patient:
+          // RULE_ORTHOSTATIC reads `position == STANDING and sbp < 100` on the row it fires
+          // from. The schema already modelled it per reading and defaults to SITTING, so
+          // before this token every reading was silently reported as seated.
+          var P = v.toUpperCase();
+          if (POSITIONS.indexOf(P) < 0) {
+            throw new Error(where + "pos= must be one of " + POSITIONS.join(", ") +
+                            ", got " + JSON.stringify(v));
+          }
+          r.position = P;
+          return;
+        }
         var spec = TOKENS[k];
         if (!spec) {
           throw new Error(where + "unknown field " + JSON.stringify(k) + ". Known: " +
-                          Object.keys(TOKENS).concat(["meds", "sym"]).join(", "));
+                          Object.keys(TOKENS).concat(["meds", "sym", "pos"]).join(", "));
         }
         if (!isFinite(Number(v))) throw new Error(where + k + "= must be a number in " + spec[1]);
         r[spec[0]] = Number(v);
