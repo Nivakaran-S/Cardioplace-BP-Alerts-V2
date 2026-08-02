@@ -140,7 +140,16 @@
       VOCAB = await (await fetch("/api/schema")).json();
       checkboxes($("conditions"), VOCAB.conditions || [], "cond");
       checkboxes($("medications"), VOCAB.medications || [], "med");
-      checkboxes($("symptoms"), VOCAB.symptoms || [], "sym");
+      // Symptoms have no checkbox group: they are per-READING, and the only row a checkbox
+      // could honestly describe is the last one. `sym=` on the line says the same thing
+      // without implying the others were symptom-free. The vocabulary still has to be
+      // discoverable, though -- the schema rejects an unknown key with "unknown symptom
+      // keys: [...]" and does not list the valid ones -- so it is rendered into the format
+      // help from /api/schema, which means it cannot drift from what the API accepts.
+      var st = $("sym-tokens");
+      if (st && (VOCAB.symptoms || []).length) {
+        st.textContent = VOCAB.symptoms.map(function (s) { return s.key; }).join(", ");
+      }
     } catch (e) { /* the form still works with the free-text fields alone */ }
     refreshHealth();
   }
@@ -234,15 +243,12 @@
   }
 
   function buildRequest() {
+    // Symptoms are per-READING in the schema and are entered per reading, via `sym=`. The
+    // "Symptoms at the latest reading" checkbox group used to sit alongside this and attach
+    // to the last row only; it was removed because it could describe exactly one reading
+    // while the token describes any of them, and two inputs for one field meant a precedence
+    // rule (`sym=` won) that nothing in the UI explained.
     var rows = parseReadings($("readings").value);
-    // Symptoms are per-READING in the schema, not per-profile. The checkboxes ask "at the
-    // latest reading", so they attach to the last row only -- back-filling would invent a
-    // symptom record that was never reported. A `sym=` token on that line already said the
-    // same thing, so it wins.
-    var syms = picked("sym");
-    if (syms.length && !rows[rows.length - 1].symptoms) {
-      rows[rows.length - 1].symptoms = syms;
-    }
     var profile = {
       age: num("age") || 65, is_male: Number($("sex").value),
       is_dm: Number($("dm").value), is_pregnant: Number($("pregnant").value),

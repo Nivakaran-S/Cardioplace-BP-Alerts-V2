@@ -50,7 +50,8 @@
           <dl class="tokens">
             <dt>w=</dt><dd>weight, kg</dd>
             <dt>meds=</dt><dd>all medications taken that day — <code>y</code> or <code>n</code></dd>
-            <dt>sym=</dt><dd>symptoms that session, joined by <code>+</code></dd>
+            <dt>sym=</dt><dd>symptoms that session, joined by <code>+</code>
+              <div class="caption" id="sym-tokens"></div></dd>
           </dl>
           <p class="caption">
             Everything after the pulse is optional. Same-day adherence is the one value the
@@ -100,11 +101,6 @@
       <details class="group">
         <summary>Medications</summary>
         <div class="group-body"><div id="medications" class="checks cols-2"></div></div>
-      </details>
-
-      <details class="group">
-        <summary>Symptoms at the latest reading</summary>
-        <div class="group-body"><div id="symptoms" class="checks"></div></div>
       </details>
 
       <button id="btn-predict" class="btn-primary" type="button">Assess</button>

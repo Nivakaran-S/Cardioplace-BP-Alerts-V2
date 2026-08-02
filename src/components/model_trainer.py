@@ -667,7 +667,7 @@ class ModelTrainer:
             # reference it is supposed to improve on. The scorecard now decides.
             det_name = choose_serving_detector(det_report_val, config.alert_budget_pct)
             det = build_serving_detector(det_name, D, imputer, dense_cols, features,
-                                         det_forecaster, config)
+                                         det_forecaster, config, tuned=best_detector)
             logging.info("serving detector: %s (selected on val at the %.0f%% budget)",
                          det_name, config.alert_budget_pct)
             # No sbp_history argument: D_val holds many patients, so the reference band
@@ -766,7 +766,8 @@ class ModelTrainer:
 
             # ---- 10. fairness ----------------------------------------------------
             fairness = self.run_fairness(F, features, config, winner, M_hold,
-                                         D_test, det_report, shipped)
+                                         D_test, det_report, shipped,
+                                         shipped_detector=det_name)
             if len(fairness):
                 save_report(config.report_path("fairness.csv"), fairness)
 
@@ -1091,11 +1092,20 @@ class ModelTrainer:
         return out
 
     def run_fairness(self, F, features, config, winner, M_hold, D_test, det_report,
-                     shipped=None):
-        """Subgroup performance for the forecaster, the offset and the best detector.
+                     shipped=None, shipped_detector=None):
+        """Subgroup performance for the forecaster, the offset and the SHIPPED detector.
 
         Audits whatever SHIPS. Auditing a learned model that lost the ship decision
         would clear a subgroup gate for something no patient is ever scored by.
+
+        That contract held for the forecaster and was broken for the detector. This method
+        was never told which detector ships, so it audited the highest `auc_pr` row of the
+        TEST scorecard -- over every detector, including the fusion legs and change-point
+        statistics that are deliberately unserveable -- while `choose_serving_detector` picks
+        from the VAL scorecard restricted to `SERVEABLE_DETECTORS`. The two disagreed on the
+        08_02 run: `d_forecast_level` shipped, `d_forecast_breach` was audited, and gate 5 --
+        which is CRITICAL and blocks promotion -- failed on the model that does not ship
+        while the parity of the one that does was never measured.
         """
         try:
             frames = []
@@ -1143,8 +1153,22 @@ class ModelTrainer:
             if len(det_report) and len(D_test):
                 learned = det_report[(det_report.budget_pct == config.alert_budget_pct)
                                      & (det_report.detector != "d_fixed_threshold")]
-                if len(learned):
-                    best_col = learned.sort_values("auc_pr").iloc[-1].detector
+                # The shipped detector, whenever it is scoreable on these rows. The auc_pr
+                # fallback is kept for a bundle that reported no detector, and says so in the
+                # metric label rather than silently auditing a stand-in.
+                best_col = None
+                if shipped_detector and shipped_detector in D_test.columns:
+                    best_col = str(shipped_detector)
+                elif len(learned):
+                    best_col = str(learned.sort_values("auc_pr").iloc[-1].detector)
+                    logging.warning(
+                        "fairness: shipped detector %r is not a column on the test frame; "
+                        "auditing %s (highest test auc_pr) instead -- this gate is critical, "
+                        "so the substitution is recorded in the metric name",
+                        shipped_detector, best_col)
+                if best_col is not None:
+                    audited_is_shipped = best_col == str(shipped_detector or "")
+                    suffix = "" if audited_is_shipped else " [NOT the shipped detector]"
                     cut = float(np.percentile(D_test[best_col].dropna(),
                                               100 - config.alert_budget_pct))
                     dt = D_test.copy()
@@ -1171,7 +1195,7 @@ class ModelTrainer:
                         lambda x: (float(x[x.event_next == 1].flag.mean())
                                    if (x.event_next == 1).any() else np.nan),
                         FAIR_MARGIN_PP,
-                        f"{best_col} recall @{config.alert_budget_pct}%",
+                        f"{best_col} recall @{config.alert_budget_pct}%{suffix}",
                         higher_is_better=True))
                     frames.append(slice_gate(
                         dt, ["is_male", "age_band", "is_dm"],
@@ -1180,7 +1204,8 @@ class ModelTrainer:
                         # Reported only: a margin of 1.0 cannot fail, because precision is not
                         # comparable across subgroups and must not gate promotion.
                         1.0,
-                        f"{best_col} precision @{config.alert_budget_pct}% (reported only)",
+                        f"{best_col} precision @{config.alert_budget_pct}% "
+                        f"(reported only){suffix}",
                         higher_is_better=True))
 
             fairness = pd.concat([f for f in frames if len(f)], ignore_index=True) \

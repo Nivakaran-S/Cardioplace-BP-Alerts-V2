@@ -45,8 +45,14 @@ CUTS_PER_PATIENT = 6
 
 #: What the run that produced the promoted bundle reported on its own held-out split. Serving
 #: is compared against these, with room for the sample being smaller and differently drawn.
-TRAIN_REPORTED = {"sbp_mae": 14.135, "dbp_mae": 7.298, "idwg_mae": 0.480,
+TRAIN_REPORTED = {"sbp_mae": 14.135, "dbp_mae": 7.298,
                   "detector_auc": 0.765, "detector_ap_lift": 2.33}
+
+#: The signals this service forecasts. `idwg` was a third one until the dialysis inputs were
+#: dropped: it could never be scored here, because a request cannot carry interdialytic
+#: weight gain, so every idwg row in this file was silently skipped by the `pt is not None`
+#: guard while the loop implied it was being checked.
+SIGNALS = ("sbp", "dbp")
 
 
 def chk(name, cond, extra=""):
@@ -112,7 +118,7 @@ def score(P, test):
                 if upto + h >= len(g):
                     continue
                 act = g.iloc[upto + h]
-                for sig in ("sbp", "dbp", "idwg"):
+                for sig in SIGNALS:
                     node = (f.get(sig) or {}).get(key) or {}
                     pt = node.get("point")
                     if pt is not None and np.isfinite(pt) and pd.notna(act.get(sig)):
@@ -186,7 +192,7 @@ def run():
         rejected <= 0.10 * (len(D) + rejected), f"{rejected} rejected of {len(D) + rejected}")
 
     print("\n--- forecast, against the EWMA baseline on the same rows ---")
-    for sig in ("sbp", "dbp", "idwg"):
+    for sig in SIGNALS:
         for key in ("h0", "h1", "h2"):
             pc, ac = f"{sig}_{key}_pred", f"{sig}_{key}_act"
             if pc not in D:
@@ -203,7 +209,7 @@ def run():
     # The headline guard. Not "beats the baseline" -- the training run's own paired bootstrap
     # puts the sbp gain at 0.33 mmHg on a 14 mmHg error, which 400 rows cannot resolve. This
     # asks the answerable question: has serving accuracy COLLAPSED relative to the baseline?
-    for sig, tol in (("sbp", 1.25), ("dbp", 1.25), ("idwg", 1.40)):
+    for sig, tol in (("sbp", 1.25), ("dbp", 1.25)):
         pc, ac, bc = f"{sig}_h0_pred", f"{sig}_h0_act", f"{sig}_ewma"
         if pc not in D or bc not in D:
             continue

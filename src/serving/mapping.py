@@ -78,9 +78,14 @@ def to_history(req) -> pd.DataFrame:
     corpus and those features were populated then, so this is a real train/serve shift with a
     known cost; `feature_coverage` reports it per request.
 
-    The columns still have to EXIST, because `_one_series` reads several unconditionally and a
-    missing one raises inside a CustomException, turning a valid request into a 500. So they
-    are NaN, never zero: zero ultrafiltration is a clinically meaningful and wrong statement.
+    Since the dialysis features were dropped from the model, the second kind of absence no
+    longer costs anything: `CausalFeatureBuilder` neither derives nor lags these columns, and
+    `idwg` is no longer a forecast target, so a bundle trained after that change has no
+    feature that reads them. They are still emitted as NaN -- never zero, because zero
+    ultrafiltration is a clinically meaningful and wrong statement -- for two reasons: the
+    rule-engine advisory path still probes `history.idwg` before deciding it has nothing to
+    say, and a bundle frozen BEFORE the change still lists those features, so the coverage
+    block has to be able to report them as absent rather than raise.
     """
 
     p = req.profile
@@ -102,10 +107,10 @@ def to_history(req) -> pd.DataFrame:
             "ts": pd.Timestamp(r.date),
             "sbp": float(r.sbp), "dbp": float(r.dbp),
             "weight": float(r.weight) if r.weight is not None else np.nan,
-            # The dialysis columns still have to EXIST -- `_one_series` reads several of them
-            # unconditionally and a missing column raises inside a CustomException, turning a
-            # valid request into a 500. NaN is the honest value: this product does not collect
-            # them, and NaN is what the feature builder was built to absorb.
+            # The dialysis columns are carried as NaN rather than omitted. Nothing in the
+            # feature builder reads them any more, but the engine panel is built from this
+            # frame and an older bundle still names the features they fed, so the coverage
+            # block needs them present to report them missing.
             "idwg": np.nan, "dryweight": np.nan, "sbp_drop": np.nan,
             "uf_total": np.nan, "session_hours": np.nan,
             "age": float(p.age), "is_male": int(p.is_male), "is_dm": int(p.is_dm),
@@ -118,9 +123,9 @@ def to_history(req) -> pd.DataFrame:
             "position": r.position,
             "_symptoms": tuple(r.symptoms),
         }
-        # idwg_rel and uf_rate were derived here while the fields were collected. Both are
-        # functions of inputs this product no longer asks for, so they are NaN by
-        # construction rather than by omission.
+        # idwg_rel and uf_rate were derived here while the fields were collected. The feature
+        # builder no longer produces either, so these exist only for an older bundle's
+        # coverage report.
         row["idwg_rel"] = np.nan
         row["uf_rate"] = np.nan
 

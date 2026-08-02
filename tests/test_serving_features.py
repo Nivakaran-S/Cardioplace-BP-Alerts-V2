@@ -79,12 +79,13 @@ SYMPTOM_FEATURES = ["sym_any_lag1", "sym_any_mean7", "sym_count_lag1", "sym_red_
                     "sym_shortness_of_breath_lag1", "sym_syncope_rate30"]
 HR_FEATURES = ["heart_rate_lag1", "heart_rate_mean7", "heart_rate_mean30",
                "shock_index_lag1", "hr_z", "hr_d1"]
-#: Dialysis-derived features the product no longer collects the inputs for. NaN by
-#: construction now, and asserted so: the distinction this file exists to keep is between
-#: "not submitted" and "submitted and dropped", and a deliberate product decision belongs in
-#: the first group with a reason attached.
+#: Dialysis-derived features. They were NaN-on-every-request once the inputs were withdrawn,
+#: and are now not built at all -- `CausalFeatureBuilder` neither derives nor lags them and
+#: `idwg` is no longer a forecast target. The list stays because the assertion below accepts
+#: either outcome (absent, or present and NaN), so it holds for a bundle frozen on either side
+#: of the change and fails the moment one of these silently starts resolving to a number.
 NOT_COLLECTED = ["idwg_rel_lag1", "idwg_lag1", "uf_rate_lag1", "uf_lag1", "vintage_years",
-                 "sbp_drop_lag1"]
+                 "sbp_drop_lag1", "idwg_per_kg", "uf_per_kg", "idwg_x_sbp_slope7"]
 
 #: Genuinely unavailable at serving. Their absence is the documented shift, not a defect.
 HONESTLY_ABSENT = ["uf_total_lag1"]
@@ -286,16 +287,31 @@ def _bundle_coverage():
     fixable = [c for c in full if _stem(c) not in _NOT_COLLECTED]
     chk("*** a complete request resolves every feature this product can supply ***",
         not fixable, f"{len(fixable)} still NaN: {sorted(fixable)[:10]}")
-    chk("    the rest are dialysis measurements, absent by product decision",
-        len(product) == len(full) and len(product) > 20,
-        f"{len(product)} of {len(full)}")
+    # Every residual absence must be a dialysis measurement -- and on a bundle trained after
+    # those features were dropped there are no residuals at all, which is the better outcome
+    # and must not read as a failure. This used to demand `len(product) > 20`, which asserted
+    # that the bundle still CARRIED at least twenty unresolvable dialysis features; the
+    # 08_02 retrain resolves 132/132 and the check failed on "0 of 0".
+    chk("    any residual absence is a dialysis measurement, absent by product decision",
+        len(product) == len(full),
+        f"{len(product)} of {len(full)} — non-dialysis residue: "
+        f"{sorted(set(full) - set(product))[:6]}")
+    if not full:
+        print("  INFO    0 unresolved: this bundle was trained without the dialysis block")
 
     # The control is the whole point: if the bare request ALSO resolved everything, the check
     # above would be passing for free and telling us nothing about the mapping.
     bare = missing(build_request(symptoms=False, pulse=False,
                                  session=False, clinical=False, vitals=False))
+    # The threshold is 10, not the original 40. That 40 was sized against a 175-feature
+    # bundle whose dialysis block was unresolvable for EVERY request, bare or complete -- so
+    # most of the 40 were features the control could take no credit for. On a 132-feature
+    # bundle the gap between bare and complete is carried entirely by inputs the caller
+    # actually controls (pulse, symptoms, adherence, conditions, medications), which is what
+    # this control was always meant to measure. It still cannot pass vacuously: a bare
+    # request resolving everything would mean the mapping ignores those inputs.
     chk("    (control) a bare request leaves many unresolved",
-        len(bare) > 40, f"only {len(bare)} NaN -- the completeness check may be vacuous")
+        len(bare) >= 10, f"only {len(bare)} NaN -- the completeness check may be vacuous")
     print(f"  INFO    bare request: {len(feats) - len(bare)}/{len(feats)} resolved; "
           f"complete request: {len(feats) - len(full)}/{len(feats)}")
 

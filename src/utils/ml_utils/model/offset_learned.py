@@ -427,7 +427,7 @@ def train_learned_offset(F: pd.DataFrame, config, offset_model, seed: int = SEED
         rows.append(_population_row(se, ho, config))
 
         board = pd.DataFrame(rows).sort_values("select_pinball")
-        best, decision = _promote(board, fitted, ho, config, seed)
+        best, decision = _promote(board, fitted, ho, config, seed, offset_model)
         return board, best, decision
     except Exception as e:
         raise CustomException(e, sys)
@@ -448,14 +448,23 @@ def _population_row(se, ho, config) -> dict:
     return r
 
 
-def _promote(board, fitted, ho, config, seed):
+def _promote(board, fitted, ho, config, seed, offset_model=None):
     """Select on `select`, then require a paired win on `holdout` to promote.
 
     Selection and the promotion test run on different patients on purpose. A candidate that
     wins on `select` has been chosen for winning there; asking whether it also beats the
     reference on `holdout`, paired row by row, is the only question whose answer was not
     already decided by the selection.
+
+    `offset_model` is the FITTED blend, and it has to be, because `k` is searched over
+    (10, 30, 60) by `search_offset`. This function used to rebuild the blend reference from
+    `config.offset_k` -- the unsearched default of 30 -- while the board above built it from
+    `offset_model.k`. Whenever the search picked anything other than 30, the promotion test
+    was therefore run against a blend that neither appears on the board nor ships in the
+    bundle, so a learned candidate was promoted or rejected against a model no patient is
+    ever scored by.
     """
+    k_blend = float(getattr(offset_model, "k", None) or config.offset_k)
     learned = board[(board.family == "learned") & board.select_pinball.notna()]
     refs = board[(board.family == "reference") & board.holdout_pinball.notna()]
     if learned.empty or refs.empty or len(ho) < 30:
@@ -474,7 +483,7 @@ def _promote(board, fitted, ho, config, seed):
     elif ref_name == "cohort prior only":
         raw = ho.cohort_prior.to_numpy(float)
     else:
-        w = ho.hist_n / (ho.hist_n + config.offset_k)
+        w = ho.hist_n / (ho.hist_n + k_blend)
         raw = (w * ho.hist_q90.fillna(ho.cohort_prior) + (1 - w) * ho.cohort_prior).to_numpy(float)
     p_ref = apply_caps(raw, config)
 

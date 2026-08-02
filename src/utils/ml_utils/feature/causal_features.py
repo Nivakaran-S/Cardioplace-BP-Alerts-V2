@@ -47,28 +47,17 @@ def build_panel(sessions: pd.DataFrame, static: pd.DataFrame, config) -> pd.Data
     p["age_band"] = pd.cut(p.age, [0, 50, 65, 75, 200],
                            labels=["<50", "50-64", "65-74", "75+"], right=False)
 
-    # Intradialytic quantities. All of these are CONTEMPORANEOUS -- they describe the session
-    # being predicted, not the history before it -- so every one of them is in
-    # CausalFeatureBuilder.DROP and reaches a model only through its lagged form.
-    p["nadir_sbp"] = p.sbp_min
-    p["map_drop"] = p.map_est - (p.sbp_min + 2 * p.dbp) / 3.0
-    if "dryweight" in p.columns:
-        # % of dry weight gained between sessions. Clipped: the raw idwg column carries
-        # scale errors out to +/-24 kg, which the data contract already reports as a WARN.
-        p["idwg_rel"] = (100.0 * p.idwg / p.dryweight).clip(0, 12)
-    if {"session_hours", "dryweight"} <= set(p.columns):
-        # Ultrafiltration rate in mL/h/kg. 10 mL/h/kg is the cited threshold above which
-        # intradialytic hypotension risk rises sharply, so the scale here is clinical, not
-        # arbitrary. uf_total is litres, hence the x1000.
-        hrs = p.session_hours.where(p.session_hours > 0)
-        p["uf_rate"] = ((p.uf_total * 1000.0) / (hrs * p.dryweight)).clip(0, 30)
-    if "first_dialysis_ts" in p.columns:
-        # Re-parsed rather than assumed: the panel is rebuilt from the session CSV, and a
-        # datetime column written to CSV comes back as a string. Subtracting it from `ts`
-        # then raises deep inside pandas with a message that names neither column.
-        fd = pd.to_datetime(p.first_dialysis_ts, errors="coerce")
-        p["first_dialysis_ts"] = fd
-        p["vintage_years"] = ((p.ts - fd).dt.days / 365.25).clip(0, 40)
+    # The intradialytic derivations that used to live here -- nadir_sbp, map_drop, idwg_rel,
+    # uf_rate and vintage_years -- are gone. They were derived from dialysis measurements
+    # (session minimum pressure, dry weight, ultrafiltration volume, session length, the
+    # first-dialysis date), and this is a blood-pressure service: `src/serving/schemas.py`
+    # refuses every one of those inputs, so at serving time each derivation was NaN on every
+    # request and each lagged form was a fitted feature that could never resolve.
+    #
+    # The RAW columns are untouched -- ingestion still reads them from d1, the data contract
+    # still range-checks them, and the synthetic symptom generator still conditions on
+    # sbp_drop / idwg / dryweight. They are simply not model inputs any more, and DROP keeps
+    # them out even if an older panel is re-read from disk.
     return p
 
 
@@ -119,8 +108,12 @@ class CausalFeatureBuilder:
             # session identity and provenance, added by the sessionisation fix
             "session_start", "session_end", "session_hours", "session_source",
             "first_dialysis_ts",
-            # contemporaneous intradialytic derivations from build_panel
-            "nadir_sbp", "map_drop", "idwg_rel", "uf_rate",
+            # DIALYSIS MEASUREMENTS. `build_panel` no longer derives these and `_one_series`
+            # no longer lags them, so on a fresh run nothing here can appear. They stay listed
+            # because `feature_names_` admits every numeric column not in this set, and the
+            # panel is written to parquet and re-read: a run resumed against an older
+            # panel.parquet would otherwise silently readmit them as features.
+            "nadir_sbp", "map_drop", "idwg_rel", "uf_rate", "vintage_years",
             # Model 4's clinical overlay: contemporaneous, so lagged forms only.
             "heart_rate", "took_all_meds", "missed_antihypertensive", "sym_count",
             "sym_any", "sym_red_flag", "idh_kdoqi", "n_medications",
@@ -184,8 +177,8 @@ class CausalFeatureBuilder:
                 g[c] = np.nan
 
         g["gap_mean24"] = g.days_since_last.shift(1).rolling(24, min_periods=4).mean()
-        g["sbp_drop_lag1"] = g.sbp_drop.shift(1)
-        g["uf_lag1"] = g.uf_total.shift(1)
+        # sbp_drop_lag1 and uf_lag1 were here. Both read dialysis measurements this service
+        # does not collect, so both were NaN on every served request.
 
         # ---- pulse-pressure dynamics -------------------------------------------------
         # Widening pulse pressure is an arterial-stiffness signal that neither SBP nor DBP
@@ -220,19 +213,16 @@ class CausalFeatureBuilder:
                 g[f"{s}_ewm_resid"] = g[s].shift(1) - g[f"{s}_ewm{a_hi}"]
 
         # ---- size-normalised ratios ---------------------------------------------------
-        # A 2 kg gain means something different in a 50 kg patient and a 100 kg one.
-        w1 = g.weight.shift(1).replace(0, np.nan)
-        g["idwg_per_kg"] = g.idwg.shift(1) / w1
-        g["uf_per_kg"] = g.uf_total.shift(1) / w1
+        # idwg_per_kg and uf_per_kg were here, normalising fluid quantities by body weight.
+        # Both numerators are dialysis measurements, so both are gone; the pressure ratio
+        # reads two numbers every request carries.
         g["sbp_dbp_ratio"] = g.sbp.shift(1) / g.dbp.shift(1).replace(0, np.nan)
 
-        # ---- interaction ---------------------------------------------------------------
-        # The only explicit interaction in the design. Fluid loading and a rising pressure
-        # trend are individually unremarkable and jointly the volume-overload picture; a
-        # linear model cannot express that product and the trees would have to spend depth
-        # rediscovering it.
-        if "sbp_slope7" in g:
-            g["idwg_x_sbp_slope7"] = g["idwg_lag1"] * g["sbp_slope7"]
+        # The design's one explicit interaction, idwg_x_sbp_slope7, was the volume-overload
+        # picture: fluid loading times a rising pressure trend. Its left factor is gone with
+        # idwg, and there is no blood-pressure-only substitute that means the same thing, so
+        # the feature is removed rather than replaced with something that merely fills the
+        # slot.
 
         # Snapshot the RAW symptom columns before the blocks below start adding derived
         # ones. Reading `g.columns` afterwards would sweep up sym_any_lag1 and friends and
@@ -245,8 +235,10 @@ class CausalFeatureBuilder:
         # Present only when the synthetic symptom overlay has been merged onto the panel.
         # Every one of these reads shift(1) or later: the contemporaneous columns are in
         # DROP and reach a model only through these lagged forms.
-        for c in ("heart_rate", "took_all_meds", "missed_antihypertensive", "uf_rate",
-                  "idwg_rel", "sym_any", "sym_count"):
+        # uf_rate and idwg_rel used to be lagged here alongside the rest; they are dialysis
+        # derivations and this service collects neither their inputs nor them.
+        for c in ("heart_rate", "took_all_meds", "missed_antihypertensive",
+                  "sym_any", "sym_count"):
             if c not in g.columns:
                 continue
             v = g[c].shift(1)
@@ -403,7 +395,7 @@ def feature_group(name: str) -> str:
     available, so a feature landing in "other" is not cosmetic -- it gets permuted with an
     unrelated set and its importance is attributed to the wrong thing.
     """
-    if name.startswith(("sbp_", "dbp_", "idwg_")):
+    if name.startswith(("sbp_", "dbp_")):
         base = name.split("_", 1)[1]
         # Order matters: the contrast families are suffixes on the same prefixes as the
         # level families, so they must be tested before the level prefixes below.
@@ -437,16 +429,12 @@ def feature_group(name: str) -> str:
             return "size-normalised"
     if name.startswith("pp_"):
         return "pulse-pressure dynamics"
-    if name in ("idwg_per_kg", "uf_per_kg", "sbp_dbp_ratio"):
+    if name == "sbp_dbp_ratio":
         return "size-normalised"
-    if name.startswith("idwg_x_") or "_x_" in name:
+    if "_x_" in name:
         return "interaction"
     if name.startswith("weight"):
-        return "fluid / weight"
-    if name.startswith("uf_") or name.startswith("uf_rate"):
-        return "ultrafiltration"
-    if name.startswith("sbp_drop") or name.startswith("map_drop") or name.startswith("nadir"):
-        return "intradialytic"
+        return "weight"
     if name.startswith("hr_") or name.startswith("heart_rate") or name == "shock_index_lag1":
         return "heart rate"
     if name.startswith("sym_"):
@@ -458,7 +446,7 @@ def feature_group(name: str) -> str:
         return "adherence"
     if name.startswith("has_") or name.startswith("dx_") or name.startswith("clin_"):
         return "diagnosed condition"
-    if name in ("age", "is_male", "is_dm", "vintage_years"):
+    if name in ("age", "is_male", "is_dm"):
         return "static"
     if name in ("days_since_last", "gap_mean24", "is_weekend"):
         return "cadence"
@@ -470,7 +458,7 @@ def feature_dictionary(F: pd.DataFrame, features: list) -> pd.DataFrame:
     d = pd.DataFrame({"feature": features})
     d["group"] = d.feature.map(feature_group)
     d["signal"] = d.feature.str.split("_").str[0].where(
-        d.feature.str.startswith(("sbp", "dbp", "idwg", "weight")), "-")
+        d.feature.str.startswith(("sbp", "dbp", "weight")), "-")
     d["density"] = d.feature.map(F[features].notna().mean())
     return d
 

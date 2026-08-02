@@ -47,13 +47,17 @@ Gauss-Hermite. Where one does not, that is reported per node rather than papered
 Chaining only helps where the driver is forecastable AND present at serving:
 
   hypertensive (6 symptoms)  driver sbp_ex   -> forecast, present     -> helped
-  volume (2)                 driver idwg/dw  -> forecast, needs dryweight
+  volume (2)                 driver idwg/dw  -> NO LONGER forecast    -> unreachable
   hypotensive (4)            driver sbp_drop -> NOT a forecast signal -> unreachable
   drug (3)                   driver on_ace   -> static                -> unaffected
 
-Four of fifteen symptoms cannot benefit from this path at all, because `sbp_drop` is an
-intradialytic measurement that is neither forecast nor available at serving. Stated here and
-in the payload, because "coherent joint BP and symptom prediction" implies otherwise.
+Six of fifteen symptoms cannot benefit from this path at all. Four were always unreachable,
+because `sbp_drop` is an intradialytic measurement that is neither forecast nor available at
+serving. The two volume-mechanism symptoms -- leg swelling and shortness of breath -- joined
+them when `idwg` was dropped as a forecast target: this is a blood-pressure service, a request
+cannot carry interdialytic weight gain, so there is no idwg node to append and the driver stays
+NaN on every chained row. Stated here and in the payload, because "coherent joint BP and
+symptom prediction" implies otherwise.
 """
 
 import numpy as np
@@ -280,9 +284,12 @@ def chained_symptom_risk(predictor, history, advisory, as_of=None, *,
         "cut_note": ("The operating cut was chosen on OBSERVED rows and does not carry its "
                      "alert-budget meaning to a chained row, so no flag is raised here. It "
                      "is shown for reference only until a chained cut is fitted."),
-        "reach_note": ("Only the systolic and interdialytic-weight-gain drivers are forecast. "
-                       "The intradialytic pressure drop is not a forecast signal and is absent "
-                       "at serving, so the four hypotensive-mechanism symptoms -- dizziness, "
-                       "syncope, palpitations, fatigue -- gain nothing from this path. "
-                       "Diastolic pressure does not enter the symptom model at all."),
+        "reach_note": ("Only the systolic driver is forecast. The intradialytic pressure drop "
+                       "is not a forecast signal and is absent at serving, so the four "
+                       "hypotensive-mechanism symptoms -- dizziness, syncope, palpitations, "
+                       "fatigue -- gain nothing from this path; interdialytic weight gain "
+                       "stopped being a forecast target when the dialysis inputs were "
+                       "withdrawn, which adds the two volume-mechanism symptoms -- leg "
+                       "swelling, shortness of breath -- to that list. Diastolic pressure does "
+                       "not enter the symptom model at all."),
     }

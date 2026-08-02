@@ -212,6 +212,12 @@ def select_and_decide(R: pd.DataFrame, config, preds: dict = None):
        horizons: scoring the learned model across h0..h2 against the single best baseline
        cell -- always h0, because MAE grows with horizon -- would make the learned model
        answer for the hard horizons while the baseline is credited with the easy one.
+
+    Both rules now apply to EVERY signal. `preds` was collected for sbp alone, so dbp fell
+    through to the marginal-CI fallback and to `idxmin()` on val -- the two behaviours this
+    function exists to avoid. The fallback is still reached when a signal has no stored
+    predictions at all, which is the honest degradation; it is no longer the normal path for
+    half the outputs.
     """
     try:
         learned = R[(R.split == "val") & (R.family == "learned") & R.MAE.notna()]
@@ -228,8 +234,12 @@ def select_and_decide(R: pd.DataFrame, config, preds: dict = None):
                 continue
             leader = str(ranked.index[0])
             ties = {leader}
-            if preds and s == "sbp":
-                cmp_df, ties = tie_set(preds, leader, n_boot=getattr(config, "n_boot", None),
+            # Per-signal. `preds` is {signal: {model: (y, pred, lag1, series_id)}} and used to
+            # be populated for sbp alone, so dbp got neither the tie set nor the cost
+            # tie-break below -- its winner was whatever had the lowest val MAE.
+            sp = (preds or {}).get(s) or {}
+            if sp:
+                cmp_df, ties = tie_set(sp, leader, n_boot=getattr(config, "n_boot", None),
                                        seed=config.seed)
                 if len(cmp_df):
                     cmp_frames.append(cmp_df.assign(signal=s, leader=leader))
@@ -260,9 +270,10 @@ def select_and_decide(R: pd.DataFrame, config, preds: dict = None):
             learned_mae = float(sel.MAE.mean())
 
             verdict, gain, lo, hi = None, np.nan, np.nan, np.nan
-            if preds and s == "sbp" and sel_model in preds and best_name in preds:
-                y, p, _l, _sid = preds[sel_model]
-                yb, pb, _l2, _s2 = preds[best_name]
+            sp = (preds or {}).get(s) or {}
+            if sel_model in sp and best_name in sp:
+                y, p, _l, _sid = sp[sel_model]
+                yb, pb, _l2, _s2 = sp[best_name]
                 delta, (lo, hi), _n = paired_delta(
                     np.abs(np.asarray(pb, float) - np.asarray(yb, float)),
                     np.abs(np.asarray(p, float) - np.asarray(y, float)),

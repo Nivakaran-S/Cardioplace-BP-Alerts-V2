@@ -57,8 +57,26 @@ class EarlyWarningDataset:
             g = g.sort_values("step").copy()
             thr = g.event_threshold.iloc[0]
             fut = pd.concat([g.sbp.shift(-i) for i in range(1, c.warn_window + 1)], axis=1)
-            g["event_next"] = (np.nan if not np.isfinite(thr)
-                               else (fut.max(axis=1) >= thr).astype(float))
+            if not np.isfinite(thr):
+                g["event_next"] = np.nan
+            else:
+                # An unobserved future is UNKNOWN, not a non-event. `fut.max(axis=1) >= thr`
+                # made it a non-event: max() of an all-NaN window is NaN, NaN >= thr is False,
+                # and .astype(float) froze that into a hard 0. The last `warn_window` rows of
+                # every patient were therefore guaranteed negatives -- and because the split
+                # is a temporal tail, those rows sit in val and test, which is where the
+                # detector is selected and scored.
+                #
+                # Partial windows have the same defect in weaker form: a row two steps from
+                # the end was labelled 0 on the strength of one observed reading out of three.
+                #
+                # An observed breach is enough to say 1 even when the rest of the window is
+                # missing. Only a fully observed window with no breach can say 0. Everything
+                # else is NaN, which every consumer already handles -- D_val / D_test filter
+                # on .notna(), ap_lift and fuse_detectors dropna.
+                hit = (fut >= thr).any(axis=1)
+                complete = fut.notna().all(axis=1)
+                g["event_next"] = np.where(hit, 1.0, np.where(complete, 0.0, np.nan))
             sbp = g.sbp.values
             first = np.full(len(g), np.nan)
             if np.isfinite(thr):
@@ -514,33 +532,56 @@ def choose_serving_detector(det_report: pd.DataFrame, budget_pct: float,
     return chosen
 
 
+#: detector column -> the `tune_detectors` family whose search produced its parameters.
+#: Only the serveable model-based detectors appear: the column and forecast scorers have no
+#: fitted hyperparameters, and d_elliptic / d_ocsvm are not searched.
+_TUNED_FAMILY = {"d_isoforest": "isolation_forest", "d_lof": "lof", "d_gmm_nll": "gmm"}
+
+
 def build_serving_detector(name: str, D: pd.DataFrame, imputer, dense_cols: list,
-                           features: list, forecaster, config) -> ServingDetector:
-    """Fit (or wrap) the chosen detector on train+val, ready to freeze into the bundle."""
+                           features: list, forecaster, config,
+                           tuned: dict = None) -> ServingDetector:
+    """Fit (or wrap) the chosen detector on train+val, ready to freeze into the bundle.
+
+    `tuned` is `tune_detectors`' output. It is not optional in spirit: the search rebinds the
+    D columns, so the SCORECARD reflects the tuned parameters and `choose_serving_detector`
+    picks a winner on a tuned score -- while this function used to construct the shipped
+    object from hardcoded defaults. A detector could therefore be selected because tuning
+    improved it and then ship untuned, with nothing in any report saying so. That is the same
+    failure `tune_detectors` already warns about one layer up ("without this rebinding the
+    search is decoration"); this is the second half of it.
+    """
     if name in _COLUMN_SCORERS:
         return ServingDetector(name, "column")
     if name in _FORECAST_SCORERS:
         if forecaster is None:
             logging.warning("%s chosen but no forecaster available; falling back", name)
             return build_serving_detector("d_isoforest", D, imputer, dense_cols,
-                                          features, None, config)
+                                          features, None, config, tuned)
         return ServingDetector(name, "forecast", forecaster=forecaster,
                                feature_names=features,
                                event_quantile=config.event_quantile)
 
+    # Defaults first, tuned parameters over the top, so a family the search skipped (or a run
+    # whose validation split was too thin to tune at all) keeps exactly its previous fit.
+    p = ((tuned or {}).get(_TUNED_FAMILY.get(name, ""), {}) or {}).get("params") or {}
+    if p:
+        logging.info("serving detector %s uses the tuned parameters %s", name, p)
+
     fit_rows = D[D.split.isin(["train", "val"])]
     X = imputer.transform(fit_rows[dense_cols])
     if name == "d_lof":
-        model = LocalOutlierFactor(n_neighbors=25, novelty=True).fit(X)
+        model = LocalOutlierFactor(**{"n_neighbors": 25, **p}, novelty=True).fit(X)
     elif name == "d_elliptic":
         model = EllipticEnvelope(support_fraction=.9, random_state=SEED).fit(X)
     elif name == "d_ocsvm":
         model = OneClassSVM(nu=.05, gamma="scale").fit(_fit_sample(X, cap=8000))
     elif name == "d_gmm_nll":
-        model = GaussianMixture(n_components=4, covariance_type="diag",
+        model = GaussianMixture(**{"n_components": 4, **p}, covariance_type="diag",
                                 random_state=SEED, reg_covar=1e-4).fit(X)
     else:
-        model = IsolationForest(n_estimators=200, random_state=SEED, n_jobs=2).fit(X)
+        model = IsolationForest(**{"n_estimators": 200, **p},
+                                random_state=SEED, n_jobs=2).fit(X)
     return ServingDetector(name, "model", model=model, imputer=imputer, cols=dense_cols)
 
 

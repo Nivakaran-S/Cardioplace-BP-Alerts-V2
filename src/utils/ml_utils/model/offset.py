@@ -40,12 +40,28 @@ class OffsetModel:
         return self
 
     def threshold_for(self, sbp_history: pd.Series, age: float, is_male: int) -> dict:
+        """Personalised threshold from the patient's warm-up window.
+
+        `n` and `personal` must come from the SAME readings. They did not: `n` counted the
+        whole history while `personal` was the quantile of `head(warm)` alone, so a patient
+        submitting 372 readings got w = 0.925 on an estimate built from 72 of them -- the
+        weight asserted five times the evidence the estimate actually used, and the extra
+        readings moved the threshold by 1.1 mmHg while the patient's own band had risen by 30.
+
+        It is also a train/serve skew, which is what makes it a defect rather than a
+        preference. `transform` hands this method `F[F.step < warm]`, so at training `n` is
+        capped at `warm` and w can never exceed warm/(warm+k) = 0.706. Serving passed the full
+        history and ran at weights the blend was never fitted or validated at. Capping `n` to
+        the same window makes serving reproduce training instead of extrapolating past it.
+        """
         c = self.config
-        n = int(sbp_history.notna().sum())
+        h = pd.Series(sbp_history, dtype=float).dropna()
+        head = h.head(self.warm)
+        n = int(len(head))
         ck = cohort_key(age, is_male)
         cohort = float(self.cohort_prior.get(ck, self.global_prior))
         if n >= 5:
-            personal = float(sbp_history.head(self.warm).quantile(self.q))
+            personal = float(head.quantile(self.q))
             w = n / (n + self.k)
         else:
             personal, w = cohort, 0.0

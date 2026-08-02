@@ -43,13 +43,13 @@ Five layers. Four learn; the fifth does not, and the fifth is the one that decid
 
 | | Layer | What it answers | Where |
 |---|---|---|---|
-| **M1** | Forecaster | Where will this patient's SBP / DBP / IDWG be in 1–3 sessions? | `utils/ml_utils/model/architectures.py`, `estimator.py` |
+| **M1** | Forecaster | Where will this patient's SBP / DBP be in 1–3 sessions? | `utils/ml_utils/model/architectures.py`, `estimator.py` |
 | **M2** | Personalised offset | What counts as "high" *for this patient*? | `model/offset.py`, `model/offset_learned.py` |
 | **M3** | Early-warning detector | Is this patient about to breach their own band? | `model/detector.py` |
 | **M4** | Symptom heads | Which symptoms are likely? **Synthetic labels — see below.** | `model/classifier_head.py` |
 | **—** | **Rule engine** | **Does this reading require action, right now?** | `rule_engine/` |
 
-The rule engine is 56 rules across 8 tiers. It is deterministic, it needs no model, and it is
+The rule engine is 57 rules across 8 tiers. It is deterministic, it needs no model, and it is
 authoritative. The API serves it whether or not a bundle exists: **an SBP of 195 produces a red
 emergency banner on a fresh checkout with an empty `final_model/`.** That is a design property
 with a test behind it (`tests/test_api_contract.py`), not an accident.
@@ -252,9 +252,15 @@ Stated plainly, because a system that hides these is worse than one that has the
   `coverage` metric now measures it instead of leaving it implicit.
 - **The learned offset does not currently ship.** All 13 candidates are trained and scored,
   and the best does not beat the capped blend on a paired test. The blend is retained.
-- **Journaling input is missing three training features.** `idwg`, `sbp_drop` and `uf_total`
-  are intradialytic; a phone cannot supply them. They are served as missing, never zero-filled,
-  and the missingness sweep quantifies the cost.
+- **The dialysis features are gone, not served-as-missing.** `idwg`, `sbp_drop`, `uf_total`,
+  `uf_rate`, `idwg_rel` and dialysis vintage are intradialytic or dialysis-specific and a phone
+  cannot supply them. They were served as NaN for a while, which meant the model kept spending
+  capacity on columns that never resolved; they are now excluded from the feature builder
+  outright, and `idwg` is no longer a forecast target. The raw columns are still ingested and
+  range-checked — the synthetic symptom generator conditions on them — they are simply neither
+  a model input nor a model output. **This requires a retrain:** a bundle frozen before the
+  change still lists them, and `feature_coverage` will keep reporting them under
+  `not_collected` until one is promoted.
 - **No pulse column.** HEMOBP has none, so all HR-gated rules stay `BLOCKED_ON_INPUTS` against
   the corpus. At serving they are evaluated from what the user enters.
 - **`CAD` fires early by design.** `RULE_CAD_HIGH` triggers at SBP ≥ 130, ahead of

@@ -289,10 +289,11 @@ _COVERAGE_ADVICE = {
     "has_afib": ("clinical conditions", "the conditions checklist"),
 }
 
-#: Fitted features this product deliberately does not collect, because they are dialysis
-#: measurements and this is a blood-pressure service. Reported separately from the actionable
-#: gaps: telling someone to supply a field the API does not accept would be a bug report
-#: dressed as advice.
+#: Dialysis-derived features. A bundle trained after they were dropped from the feature
+#: builder carries none of these, so `not_collected` comes back empty and coverage reads
+#: ~100%; this map is what keeps an OLDER bundle -- which still lists them -- reporting them
+#: as a standing product decision rather than as an actionable gap. Telling someone to supply
+#: a field the API does not accept would be a bug report dressed as advice.
 _NOT_COLLECTED = {
     "idwg": "interdialytic weight gain", "idwg_rel": "weight gain as % of dry weight",
     "uf": "ultrafiltration volume", "uf_rate": "ultrafiltration rate",

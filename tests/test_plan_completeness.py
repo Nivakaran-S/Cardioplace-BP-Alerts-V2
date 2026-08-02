@@ -80,10 +80,17 @@ def run():
     chk("ingest ranges read from schema", TP.INGEST_RANGES["sbp"] == TP.SCHEMA_RANGES["sbp"])
 
     print("\nP2 / P3 feature families + selection")
+    # Six, not the original seven: `idwg_per_kg` and `idwg_x_sbp_slope7` were the
+    # "size-normalised" and "interaction" exemplars, and both were dropped with the dialysis
+    # block. size-normalised survives through sbp_dbp_ratio; interaction has no members left,
+    # because its only instance multiplied a fluid quantity by a pressure trend.
     fams = {feature_group(f) for f in ["pp_z", "sbp_mom_3_14", "sbp_excess_base",
-                                       "sbp_vol_ratio", "sbp_ewm_resid", "idwg_per_kg",
-                                       "idwg_x_sbp_slope7"]}
-    chk("7 restored families classified distinctly", len(fams) == 7, fams)
+                                       "sbp_vol_ratio", "sbp_ewm_resid", "sbp_dbp_ratio"]}
+    chk("6 restored families classified distinctly", len(fams) == 6, fams)
+    chk("no dialysis feature survives the builder's contract",
+        {"nadir_sbp", "map_drop", "idwg_rel", "uf_rate", "vintage_years"}
+        <= CausalFeatureBuilder.DROP)
+    chk("idwg is no longer a forecast target", "idwg" not in TP.SIGNALS, TP.SIGNALS)
     chk("feature frame keeps the raw signals the audit rebuilds from",
         {"weight", "uf_total"} <= CausalFeatureBuilder.KEEP_NON_FEATURE)
     chk("MUST_KEEP includes sbp_ewm0.3 (the explanation gate reads it)",
@@ -104,7 +111,12 @@ def run():
             if MODEL_SPEC[k]["scope"] == "local"))
     sw = inspect.getsource(E.run_sweep)
     chk("holdout_pt cold-start arm", "holdout_pt" in sw)
-    chk("baselines enter preds so the ship test can pair", "preds[name]" in sw)
+    # Baselines must reach `preds`, and for EVERY signal -- the store is keyed by signal now,
+    # because collecting sbp alone sent dbp down the marginal-CI fallback.
+    chk("baselines enter preds so the ship test can pair",
+        "preds.setdefault(signal, {})[name]" in sw)
+    chk("preds are collected for every signal, not sbp only",
+        'signal == "sbp"' not in sw, "run_sweep still gates preds on sbp")
     chk("FinalForecaster + fit_final freeze layer",
         *has("src.utils.ml_utils.model.architectures", "FinalForecaster", "fit_final"))
     sd = inspect.getsource(select_and_decide)

@@ -164,11 +164,19 @@ def run_sweep(F: pd.DataFrame, features: list, config, params: dict = None, seed
                     # without these the paired test has nothing to pair against and silently
                     # degrades to comparing two marginal confidence intervals -- which is
                     # both weaker and the exact comparison the paired test exists to replace.
-                    if (label == "test" and signal == "sbp"
+                    #
+                    # Collected for EVERY signal, keyed by signal. It used to be sbp only, so
+                    # dbp fell through to that weaker rule -- and the cost was real: on the
+                    # 08_02 run dbp's learned model beat the EWMA baseline by 0.352 mmHg and
+                    # was refused because the marginal CI happened to be 0.361 wide, while sbp
+                    # shipped on a 0.369 gain whose PAIRED interval was [0.254, 0.493]. Two
+                    # near-identical gains, opposite verdicts, decided by which test ran.
+                    if (label == "test"
                             and h == config.horizons[min(1, len(config.horizons) - 1)]):
-                        preds[name] = (part[target].values, np.asarray(pred, float),
-                                       part[f"{signal}_lag1"].values,
-                                       part.series_id.to_numpy())
+                        preds.setdefault(signal, {})[name] = (
+                            part[target].values, np.asarray(pred, float),
+                            part[f"{signal}_lag1"].values,
+                            part.series_id.to_numpy())
 
             # The bake-off is by far the longest stage, and without this it produces no
             # output between "19 candidates" and the finished board -- 25 minutes during
@@ -230,13 +238,16 @@ def run_sweep(F: pd.DataFrame, features: list, config, params: dict = None, seed
                                  signal=signal, horizon=h, split=label)
                     if r:
                         rows.append(r)
-                    if (label == "test" and signal == "sbp"
+                    if (label == "test"
                             and h == config.horizons[min(1, len(config.horizons) - 1)]):
                         # Per-row errors, kept so the ship decision can run a PAIRED
                         # bootstrap rather than comparing two marginal confidence intervals.
-                        preds[kind] = (part[target].values, np.asarray(pred, float),
-                                       part[f"{signal}_lag1"].values,
-                                       part.series_id.to_numpy())
+                        # Keyed by signal: a flat dict would collide, because the same
+                        # architecture name can win for both sbp and dbp.
+                        preds.setdefault(signal, {})[kind] = (
+                            part[target].values, np.asarray(pred, float),
+                            part[f"{signal}_lag1"].values,
+                            part.series_id.to_numpy())
 
                 cell_cost[kind] = time.perf_counter() - kind_t0
                 if cell_cost[kind] > 20.0:
