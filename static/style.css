@@ -417,4 +417,56 @@ th.rowh { text-transform: none; font-size: 13.5px; color: var(--ink); font-weigh
 footer.legal { max-width: 1560px; margin: 0 auto; padding: 0 24px 40px; font-size: 12.5px; color: var(--ink-muted); }
 footer.legal strong { color: var(--ink-2); }
 
+/* ------------------------------------------------------------------ mobile */
+
+/* The 1080px rules above collapse the two-column shell, which is the tablet problem. This
+ * is the phone tier, where the failures are different in kind: text that triggers a zoom,
+ * a grid track wider than the screen, and controls too small to hit. Each rule below is a
+ * named defect rather than a general shrink.
+ */
+@media (max-width: 640px) {
+
+  /* iOS Safari zooms the viewport when a focused control's text is under 16px, and it does
+   * not zoom back out afterwards. Every field here was 14px and the reading history was
+   * 12.5px, so tapping into the history threw the layout off-screen mid-entry -- the one
+   * box a phone user types the most into. 16px is the documented threshold, not a taste
+   * decision, which is why the mono textarea takes it too rather than staying smaller. */
+  input[type="text"], input[type="number"], select, textarea { font-size: 16px; }
+
+  /* `auto-fit` still lays a 320px track when the container is narrower than 320px, so the
+   * paired charts pushed the page wider than the screen instead of stacking. Below this
+   * width there is no room for two columns of anything. */
+  .grid-2 { grid-template-columns: 1fr; }
+  .row-2, .checks.cols-2 { grid-template-columns: 1fr; }
+
+  /* 24px of side padding is 13% of a 360px screen spent on margin. */
+  .shell { padding: 12px 12px 32px; gap: 12px; }
+  .topbar { padding: 10px 12px; flex-wrap: wrap; row-gap: 8px; }
+  .panel-head { padding: 12px 13px 0; }
+  .panel-body { padding: 10px 13px 14px; }
+  .card-head { padding: 14px 13px 0; }
+  .card-body { padding: 11px 13px 14px; }
+  .banner { padding: 14px 13px; gap: 11px; }
+
+  /* Tap targets. 34px is under the 44px minimum and these sit side by side in the header,
+   * which is the combination that produces mis-taps rather than merely small buttons. */
+  .icon-btn { width: 44px; height: 44px; }
+  .btn-primary { padding: 13px 16px; }
+
+  /* The vocabulary lists rendered from /api/schema -- symptom keys, position values -- are
+   * long unbroken comma runs, and a single one of them is wider than the screen. */
+  .caption, dl.tokens dd, dl.tokens dt { overflow-wrap: anywhere; }
+
+  /* Tiles go full width rather than squeezing two 178px columns into ~334px, and the
+   * headline numeral comes down with them. */
+  .tiles { grid-template-columns: 1fr; gap: 10px; }
+  .tile .v { font-size: 24px; }
+
+  /* The chart tooltip is absolutely positioned and `nowrap`, so a point near the right edge
+   * put it partly off-screen -- and being pointer-events: none inside a chart, there is no
+   * way to scroll or dismiss it to read the rest. Wrapping is the fix; the cap keeps it
+   * from covering the chart it describes. */
+  .tip { white-space: normal; max-width: 70vw; }
+}
+
 @media print { .panel, .topbar { display: none; } .shell { grid-template-columns: 1fr; } }
