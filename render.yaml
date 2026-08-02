@@ -1,0 +1,47 @@
+# Render blueprint. Dashboard -> Blueprints -> New Blueprint Instance -> point at this repo.
+#
+# Free tier, and the two things that follow from it:
+#
+#   MEMORY. Measured steady state with the bundle loaded is 277 MB (12 MB python, 135 MB
+#   after pandas/numpy/sklearn, 139 MB with the rule registry, 277 MB once the 79 MB pickle
+#   is unpickled). Free gives 512 MB. That fits, but not with much room -- the chained
+#   symptom block rebuilds the feature frame per horizon per quadrature node, so leave
+#   `symptom_chained` off on this plan. It is opt-in per request and defaults to off.
+#
+#   SPIN-DOWN. A free web service sleeps after ~15 minutes idle. The next request pays a
+#   cold start, and this one is slower than most because it unpickles 79 MB of sklearn
+#   before it can answer. Expect the better part of a minute. That is the plan working as
+#   documented, not a fault to debug.
+#
+# The rule engine needs no model, so even a cold or model-less instance still returns a red
+# emergency banner for SBP 195. That is the layer that matters and it is never gated on the
+# ML being up.
+
+services:
+  - type: web
+    name: cardioplace-bp-alerts
+    runtime: docker
+    plan: free
+    # Free tier regions: oregon, ohio, virginia, frankfurt, singapore. Singapore is the
+    # closest to the team; change it if your users are elsewhere -- it cannot be edited
+    # after the service is created, only recreated.
+    region: singapore
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    # /api/health answers without a model and without touching the corpus, so it reports
+    # liveness rather than "is the ML layer happy". A health check that failed when the
+    # bundle was missing would take down the rule engine, which is the wrong dependency.
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: PYTHONUNBUFFERED
+        value: "1"
+      - key: PYTHONIOENCODING
+        value: utf-8
+      # Where the Dockerfile fetches the serving bundle from when the repo checkout has
+      # only an LFS pointer -- which is what Render's clone produces, because it does not
+      # fetch LFS objects. GitHub's media host serves LFS content for public repos with no
+      # client and no credentials. Override this to move the bundle elsewhere (S3, a
+      # release asset) without touching the Dockerfile.
+      - key: MODEL_URL
+        value: https://media.githubusercontent.com/media/Nivakaran-S/Cardioplace-BP-Alerts-V2/main/final_model/model.pkl
