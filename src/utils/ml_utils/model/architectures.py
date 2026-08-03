@@ -1,4 +1,4 @@
-"""The Model 1 architecture registry: 24 candidates across 9 families.
+"""The Model 1 architecture registry: 23 candidates across 8 families.
 
 Port of notebook sections 6.1-6.3. Every architecture is registered with three pieces of
 metadata that the selection rule actually reads:
@@ -44,7 +44,6 @@ from sklearn.ensemble import (
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import ElasticNet, HuberRegressor, Ridge
 from sklearn.neighbors import KNeighborsRegressor
-from sklearn.neural_network import MLPRegressor
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
@@ -65,10 +64,10 @@ from src.logging.logger import logging
 
 #: sklearn estimator kinds. Everything here is fittable over the feature matrix directly.
 TABULAR_KINDS = ("ridge", "elasticnet", "huber", "hgb", "hgb_mae", "hgb_mse",
-                 "random_forest", "extra_trees", "knn", "mlp")
+                 "random_forest", "extra_trees", "knn")
 
 #: Kinds whose fit cost grows badly with rows; sampled down to KERNEL_FIT_ROWS.
-KERNEL_KINDS = {"knn", "mlp"}
+KERNEL_KINDS = {"knn"}
 
 
 def _lin(model) -> Pipeline:
@@ -134,14 +133,6 @@ def make_model(kind: str, **kw) -> BaseEstimator:
     if kind == "knn":
         return _lin(KNeighborsRegressor(n_neighbors=kw.get("n_neighbors", 25),
                                         weights=kw.get("weights", "distance"), n_jobs=-1))
-    if kind == "mlp":
-        # early_stopping stays False for the same reason as the boosters: sklearn's internal
-        # holdout is drawn IID from a lagged panel. An MLP without it can under-converge at
-        # max_iter=200 and will say so in a ConvergenceWarning; that warning is the honest
-        # outcome and is preferable to a leaky stopping signal on this data.
-        return _lin(MLPRegressor(hidden_layer_sizes=kw.get("hidden_layer_sizes", (64, 64)),
-                                 alpha=kw.get("alpha", 1e-4), max_iter=200,
-                                 early_stopping=False, random_state=SEED))
     raise ValueError(f"unknown model kind: {kind}")
 
 
@@ -165,9 +156,8 @@ MODEL_SPEC = {
     "hgb_mse":          _spec("trees", "medium", note="loss ablation against hgb_mae"),
     "random_forest":    _spec("trees", "high", note="bagged trees"),
     "extra_trees":      _spec("trees", "high", note="extremely randomised trees"),
-    # --- kernel / neural ----------------------------------------------------------
+    # --- kernel -------------------------------------------------------------------
     "knn":              _spec("kernel", "high", note="distance-weighted neighbours"),
-    "mlp":              _spec("neural", "medium", note="2x64 dense net"),
     # --- reparameterisation -------------------------------------------------------
     "ridge_delta":      _spec("reparam", "low", note="ridge on y - lag1"),
     "hgb_delta":        _spec("reparam", "medium", note="boosting on y - lag1"),

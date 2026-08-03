@@ -98,9 +98,11 @@ def run():
     chk("REDUNDANCY_R = 0.95", REDUNDANCY_R == 0.95)
 
     print("\nP4 / P5 Model 1 bake-off + tuning")
-    chk("24 architectures registered", len([k for k in MODEL_SPEC if k != "hgb"]) == 24,
+    chk("23 architectures registered", len([k for k in MODEL_SPEC if k != "hgb"]) == 23,
         len(MODEL_SPEC))
-    want = ["huber", "hgb_mse", "random_forest", "extra_trees", "knn", "mlp", "ridge_delta",
+    # No "mlp": the neural family was removed -- 20k rows and 132 features do not
+    # support a dense net, and it finished last of 19 by 3.9 mmHg.
+    want = ["huber", "hgb_mse", "random_forest", "extra_trees", "knn", "ridge_delta",
             "hgb_delta", "window_linear", "window_delta", "local_ar", "local_ridge",
             "local_ridge_delta", "local_hgb", "global_plus_intercept", "holt_damped",
             "theta", "ens_mean", "ens_median", "ens_inv_mae", "ens_stack_ridge"]

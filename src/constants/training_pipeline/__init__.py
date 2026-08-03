@@ -216,7 +216,7 @@ compete -- so a tier change is a compute decision, not a modelling one.
   medium  + gradient boosting, per-patient local models, ensembles        minutes
   high    + random forest, extra trees, kNN, local HGB, stacked ensemble  hours
 """
-MODEL_TIER: str = "medium"          # low | medium | high | all
+MODEL_TIER: str = "high"            # low | medium | high | all
 FAST_MODE: bool = False             # shrinks row caps, tuning budget and bootstrap draws
 
 # Per-patient models: a patient contributing ~0.6 * 60 = 36 training rows cannot support 80+

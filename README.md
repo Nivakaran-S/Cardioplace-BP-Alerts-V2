@@ -176,14 +176,14 @@ missing report is never counted as a pass.
 
 ### Tuning the cost/quality dial
 
-`MODEL_TIER` in `src/constants/training_pipeline/__init__.py` decides how many of the 24
+`MODEL_TIER` in `src/constants/training_pipeline/__init__.py` decides how many of the 23
 registered architectures compete. It changes *how many* can win, never *which* can.
 
 | tier | architectures | rough cost |
 |---|---|---|
 | `low` | 9 — linear, classical smoothers, window/delta reparameterisations | seconds |
-| `medium` (default) | 19 — adds boosting, per-patient local models, ensembles | minutes |
-| `high` / `all` | 24 — adds random forest, extra trees, kNN, local HGB, stacked ensemble | hours |
+| `medium` | 18 — adds boosting, per-patient local models, ensembles | minutes |
+| `high` (default) / `all` | 23 — adds random forest, extra trees, kNN, local HGB, stacked ensemble | hours |
 
 `FAST_MODE = True` additionally shrinks row caps, the tuning budget and bootstrap draws.
 
